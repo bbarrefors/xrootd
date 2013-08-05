@@ -1775,7 +1775,7 @@ int XrdCmsCluster::FillInPrefs(XrdCmsPrefNodes& nodes)
       {
          int result = 0;
          np->Lock();
-         if (!nodes.Acquire(Slot, *np))
+         if (nodes.Acquire(Slot, *np))
             result = 1;
          np->UnLock();
          if (result)
