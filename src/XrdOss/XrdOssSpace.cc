@@ -43,6 +43,7 @@
 #include "XrdOuc/XrdOucUtils.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysPlatform.hh"
+#include "XrdSys/XrdSysPthread.hh"
 
 /******************************************************************************/
 /*                   G l o b a l s   a n d   S t a t i c s                    */
@@ -52,7 +53,7 @@ extern XrdSysError OssEroute;
 
        const char       *XrdOssSpace::qFname                     = 0;
        const char       *XrdOssSpace::uFname                     = 0;
-       XrdOssSpace::uEnt XrdOssSpace::uData[XrdOssSpace::maxEnt] = {{{0}}};
+       XrdOssSpace::uEnt XrdOssSpace::uData[XrdOssSpace::maxEnt];
        short             XrdOssSpace::uDvec[XrdOssSpace::maxEnt] = {0};
        int               XrdOssSpace::fencEnt                    = 0;
        int               XrdOssSpace::freeEnt                    =-1;
@@ -204,6 +205,10 @@ int XrdOssSpace::Init(const char *aPath, const char *qPath, int isSOL)
    char *aP, buff[1048];
    int i, opts, updt = 0;
 
+// Initialize th usage array now
+//
+   memset(uData, 0, sizeof(uData));
+
 // Indicate whether we are solitary or not
 //
    Solitary = isSOL;
@@ -255,8 +260,7 @@ int XrdOssSpace::Init(const char *aPath, const char *qPath, int isSOL)
 // Either read the contents or initialize the contents
 //
    if (opts & O_CREAT || buf.st_size == 0)
-      {memset(uData, 0, sizeof(uData));
-       if (!write(aFD, uData, sizeof(uData)))
+      {if (!write(aFD, uData, sizeof(uData)))
           {OssEroute.Emsg("Init", errno, "create", uFname);
            UsageLock(0); return 0;
           }
@@ -485,6 +489,7 @@ long long XrdOssSpace::Usage(const char *GName, struct uEnt &uVal, int rrd)
   
 int XrdOssSpace::UsageLock(int Dolock)
 {
+   static XrdSysMutex uMutex;
    FLOCK_t lock_args;
    const char *What;
    int rc;
@@ -494,6 +499,11 @@ int XrdOssSpace::UsageLock(int Dolock)
    bzero(&lock_args, sizeof(lock_args));
    if (Dolock) {lock_args.l_type = F_WRLCK; What =   "lock";}
       else     {lock_args.l_type = F_UNLCK; What = "unlock";}
+
+// First obtain the usage mutex or unlock it
+//
+   if (Dolock) uMutex.Lock();
+      else     uMutex.UnLock();
 
 // Perform action.
 //

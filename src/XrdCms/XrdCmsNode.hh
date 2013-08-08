@@ -32,11 +32,13 @@
 
 #include <string.h>
 #include <unistd.h>
+#include <netinet/in.h>
 #include <sys/uio.h>
   
 #include "Xrd/XrdLink.hh"
 #include "XrdCms/XrdCmsTypes.hh"
 #include "XrdCms/XrdCmsRRQ.hh"
+#include "XrdNet/XrdNetAddr.hh"
 #include "XrdSys/XrdSysPthread.hh"
 
 class XrdCmsBaseFR;
@@ -87,7 +89,8 @@ const  char  *do_Gone(XrdCmsRRData &Arg);
 const  char  *do_Have(XrdCmsRRData &Arg);
 const  char  *do_Load(XrdCmsRRData &Arg);
 const  char  *do_Locate(XrdCmsRRData &Arg);
-static int    do_LocFmt(char *buff, XrdCmsSelected *sP, SMask_t pf, SMask_t wf);
+static int    do_LocFmt(char *buff, XrdCmsSelected *sP,
+                        SMask_t pf, SMask_t wf, bool lsall=false);
 const  char  *do_Mkdir(XrdCmsRRData &Arg);
 const  char  *do_Mkpath(XrdCmsRRData &Arg);
 const  char  *do_Mv(XrdCmsRRData &Arg);
@@ -120,10 +123,12 @@ inline int    Inst() {return Instance;}
 inline int    isNode(SMask_t smask) {return (smask & NodeMask) != 0;}
 inline int    isNode(const char *hn)
                     {return Link && !strcmp(Link->Host(), hn);}
-inline int    isNode(unsigned int ipa)
-                    {return ipa == IPAddr;}
-inline int    isNode(unsigned int ipa, const char *nid)
-                    {return ipa == IPAddr && (nid ? !strcmp(myNID, nid) : 1);}
+inline int    isNode(const XrdNetAddr *addr)
+                    {return netID.Same(addr);}
+inline int    isNode(XrdLink *lp, const char *nid)
+                    {return netID.Same(lp->NetAddr(),true)
+                         && (nid ? !strcmp(myNID, nid) : 1);
+                    }
 inline char  *Name()   {return (myName ? myName : (char *)"?");}
 
 inline char  *Name(int &len, int &port)
@@ -142,7 +147,6 @@ inline int   Send(const struct iovec *iov, int iovcnt, int iotot=0)
                  {return (isOffline ? -1 : Link->Send(iov, iovcnt, iotot));}
 
        void  setName(XrdLink *lnkp, int port);
-       int   getName(char *result_buffer, size_t buffer_size) const; // See notes in XrdCmsNode.cc
 
        void  setShare(int shrval)
                      {if (shrval > 99) Shrem = Shrip = Share = 0;
@@ -176,12 +180,14 @@ const  char *fsFail(const char *Who, const char *What, const char *Path, int rc)
 
 XrdSysMutex        myMutex;
 XrdLink           *Link;
-unsigned int       IPAddr;
+XrdNetAddr         netID;
 XrdCmsNode        *Next;
 time_t             DropTime;
 XrdCmsDrop        *DropJob;  
-int                IPV6Len;  // 12345678901234567890123456
-char               IPV6[28]; // [::123.123.123.123]:123456
+int                IPV6Len;                   // 12345678901234567890123456
+char               IPV6[INET6_ADDRSTRLEN+10]; // [full_ipv6_address]:123456
+int                IPV4Len;                   // 12345678901234567890123456
+char               IPV4[INET_ADDRSTRLEN+12];  // [::123.123.123.123]:123456
 
 SMask_t            NodeMask;
 int                NodeID;

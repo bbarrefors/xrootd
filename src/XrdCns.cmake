@@ -64,4 +64,3 @@ install(
   ${PROJECT_SOURCE_DIR}/docs/man/XrdCnsd.8
   ${PROJECT_SOURCE_DIR}/docs/man/cns_ssi.8
   DESTINATION ${CMAKE_INSTALL_MANDIR}/man8 )
-

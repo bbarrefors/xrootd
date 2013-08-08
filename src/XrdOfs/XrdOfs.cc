@@ -46,8 +46,11 @@
 #include "XrdCks/XrdCksConfig.hh"
 #include "XrdCks/XrdCksData.hh"
 
+#include "XrdNet/XrdNetAddr.hh"
+
 #include "XrdOfs/XrdOfs.hh"
 #include "XrdOfs/XrdOfsEvs.hh"
+#include "XrdOfs/XrdOfsHandle.hh"
 #include "XrdOfs/XrdOfsPoscq.hh"
 #include "XrdOfs/XrdOfsTrace.hh"
 #include "XrdOfs/XrdOfsSecurity.hh"
@@ -58,7 +61,6 @@
 
 #include "XrdOss/XrdOss.hh"
 
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysHeaders.hh"
 #include "XrdSys/XrdSysLogger.hh"
@@ -67,6 +69,7 @@
 
 #include "XrdOuc/XrdOuca2x.hh"
 #include "XrdOuc/XrdOucEnv.hh"
+#include "XrdOuc/XrdOucERoute.hh"
 #include "XrdOuc/XrdOucLock.hh"
 #include "XrdOuc/XrdOucMsubs.hh"
 #include "XrdOuc/XrdOucTList.hh"
@@ -121,7 +124,7 @@ XrdOss *XrdOfsOss;
 
 XrdOfs::XrdOfs()
 {
-   unsigned int myIPaddr = 0;
+   XrdNetAddr myAddr(0);
    char buff[256], *bp;
    int i;
 
@@ -151,16 +154,13 @@ XrdOfs::XrdOfs()
    poscHold= 10*60;
    poscAuto= 0;
 
-// Establish our hostname and IPV4 address
+// Establish our hostname and IPV6 address
 //
-   HostName      = XrdSysDNS::getHostName();
-   if (!XrdSysDNS::Host2IP(HostName, &myIPaddr)) myIPaddr = 0x7f000001;
-   strcpy(buff, "[::"); bp = buff+3;
-   bp += XrdSysDNS::IP2String(myIPaddr, 0, bp, 128);
-   *bp++ = ']'; *bp++ = ':';
-   sprintf(bp, "%d", myPort);
+   myAddr.Port(myPort);
+   HostName = strdup(myAddr.Name("*unknown*"));
+   myAddr.Format(buff, sizeof(buff), XrdNetAddr::fmtAdv6, XrdNetAddr::old6Map4);
    locResp = strdup(buff); locRlen = strlen(buff);
-   for (i = 0; HostName[i] && HostName[i] != '.'; i++);
+   for (i = 0; HostName[i] && HostName[i] != '.'; i++) {}
    HostName[i] = '\0';
    HostPref = strdup(HostName);
    HostName[i] = '.';
@@ -352,6 +352,46 @@ int XrdOfsDirectory::close()
 }
 
 /******************************************************************************/
+/*                              a u t o S t a t                               */
+/******************************************************************************/
+
+int XrdOfsDirectory::autoStat(struct stat *buf)
+/*
+  Function: Set stat buffer to automaticaly return stat information
+
+  Input:    Pointer to stat buffer which will be filled in on each
+            nextEntry() and represent stat information for that entry.
+
+  Output:   Upon success, returns zero. Upon error returns SFS_ERROR and sets
+            the error object to contain the reason.
+
+  Notes: 1. If autoStat() is not supported he caller will need to follow up
+            with a manual stat() call for the full path, a slow and tedious
+            process. The autoStat function significantly reduces overhead by
+            automatically providing stat information for the entry read.
+*/
+{
+   EPNAME("autoStat");
+   int retc;
+
+// Check if this directory is actually open
+//
+   if (!dp) {XrdOfsFS->Emsg(epname, error, EBADF, "autostat directory");
+             return SFS_ERROR;
+            }
+
+// Set the stat buffer in the storage system directory.
+//
+    if ((retc = dp->StatRet(buf)))
+       retc = XrdOfsFS->Emsg(epname, error, retc, "autostat", fname);
+       else retc = SFS_OK;
+
+// All done
+//
+   return retc;
+}
+  
+/******************************************************************************/
 /*                                                                            */
 /*                F i l e   O b j e c t   I n t e r f a c e s                 */
 /*                                                                            */
@@ -405,7 +445,8 @@ int XrdOfsFile::open(const char          *path,      // In
                        : Path(path), hP(0), fP(0), poscNum(0) {}
 
                        ~OpenHelper()
-                       {if (hP) hP->Retire();
+                       {int retc;
+                        if (hP) hP->Retire(retc);
                         if (fP) delete fP;
                         if (poscNum > 0) XrdOfsFS->poscQ->Del(Path, poscNum, 1);
                        }
@@ -589,7 +630,8 @@ int XrdOfsFile::open(const char          *path,      // In
            return XrdOfsFS->fsError(error, SFS_STARTED);
           }
        if (retc == -ETXTBSY) return XrdOfsFS->Stall(error, -1, path);
-       if (XrdOfsFS->Balancer) XrdOfsFS->Balancer->Removed(path);
+       if (XrdOfsFS->Balancer && retc != -ECANCELED)
+          XrdOfsFS->Balancer->Removed(path);
        return XrdOfsFS->Emsg(epname, error, retc, "open", path);
       }
 
@@ -653,7 +695,7 @@ int XrdOfsFile::close()  // In
    static XrdOfsHanCB *hCB = static_cast<XrdOfsHanCB *>(new CloseFH);
 
    XrdOfsHandle *hP;
-   int   poscNum, retc;
+   int   poscNum, retc, cRetc = 0;
    short theMode;
 
 // Trace the call
@@ -688,12 +730,14 @@ int XrdOfsFile::close()  // In
 
 // If this file was tagged as a POSC then we need to make sure it will persist
 // Note that we unpersist the file immediately when it's inactive or if no hold
-// time is allowed.  `Also, close events occur only for active handles.
+// time is allowed. Also, close events occur only for active handles. If the
+// entry was via delete then we ignore the close return code as there is no
+// one to handle it on the other side.
 //
    if ((poscNum = hP->PoscGet(theMode, !viaDel)))
       {if (viaDel)
           {if (hP->Inactive() || !XrdOfsFS->poscHold)
-              {XrdOfsFS->Unpersist(hP, !hP->Inactive()); hP->Retire();}
+              {XrdOfsFS->Unpersist(hP, !hP->Inactive()); hP->Retire(cRetc);}
               else hP->Retire(hCB, XrdOfsFS->poscHold);
            return SFS_OK;
           }
@@ -712,21 +756,21 @@ int XrdOfsFile::close()  // In
 //
    if (XrdOfsFS->evsObject && tident
    &&  XrdOfsFS->evsObject->Enabled(hP->isRW ? XrdOfsEvs::Closew
-                                            : XrdOfsEvs::Closer))
+                                             : XrdOfsEvs::Closer))
       {long long FSize, *retsz;
        char pathbuff[MAXPATHLEN+8];
        XrdOfsEvs::Event theEvent;
        if (hP->isRW) {theEvent = XrdOfsEvs::Closew; retsz = &FSize;}
           else {      theEvent = XrdOfsEvs::Closer; retsz = 0; FSize=0;}
-       if (!(hP->Retire(retsz, pathbuff, sizeof(pathbuff))))
+       if (!(hP->Retire(cRetc, retsz, pathbuff, sizeof(pathbuff))))
           {XrdOfsEvsInfo evInfo(tident, pathbuff, "" , 0, 0, FSize);
            XrdOfsFS->evsObject->Notify(theEvent, evInfo);
-          } else hP->Retire();
-      } else     hP->Retire();
+          }
+      } else hP->Retire(cRetc);
 
 // All done
 //
-    return SFS_OK;
+  return (cRetc ? XrdOfsFS->Emsg(epname, error, cRetc, "close file") : SFS_OK);
 }
 
 /******************************************************************************/
@@ -835,6 +879,35 @@ XrdSfsXferSize XrdOfsFile::read(XrdSfsFileOffset  offset,    // In
 // Return number of bytes read
 //
    return nbytes;
+}
+
+/******************************************************************************/
+/*                                  r e a d v                                 */
+/******************************************************************************/
+
+XrdSfsXferSize XrdOfsFile::readv(XrdOucIOVec     *readV,     // In
+                                 int              readCount) // In
+/*
+  Function: Perform all the reads specified in the readV vector.
+
+  Input:    readV     - A description of the reads to perform; includes the
+                        absolute offset, the size of the read, and the buffer
+                        to place the data into.
+            readCount - The size of the readV vector.
+
+  Output:   Returns the number of bytes read upon success and SFS_ERROR o/w.
+            If the number of bytes read is less than requested, it is considered
+            an error.
+*/
+{
+   EPNAME("readv");
+
+   XrdSfsXferSize nbytes = oh->Select().ReadV(readV, readCount);
+   if (nbytes < 0)
+       return XrdOfsFS->Emsg(epname, error, (int)nbytes, "readv", oh->Name());
+
+   return nbytes;
+
 }
   
 /******************************************************************************/
@@ -1262,6 +1335,12 @@ int XrdOfs::chksum(      csFunc            Func,   // In
    XTRACE(stat, Path, csName);
    AUTHORIZE(client,&cksEnv,AOP_Stat,"checksum",Path,einfo);
 
+// If we are a menager then we need to redirect the client to where the file is
+//
+   if (Finder && Finder->isRemote() 
+   &&  (rc = Finder->Locate(einfo, Path, SFS_O_RDONLY, &cksEnv)))
+      return fsError(einfo, rc);
+
 // At this point we need to convert the lfn to a pfn
 //
    if (!(Path = XrdOfsOss->Lfn2Pfn(Path, buff, MAXPATHLEN, rc)))
@@ -1448,8 +1527,8 @@ int XrdOfs::fsctl(const int               cmd,
                                'w'};
    static const int PrivNum = sizeof(PrivLet);
 
-   int retc, find_flag = SFS_O_LOCATE | (cmd & (SFS_O_NOWAIT | SFS_O_RESET));
-   int i, blen, privs, opcode = cmd & SFS_FSCTL_CMD;
+   int find_flag = SFS_O_LOCATE | (cmd&(SFS_O_FORCE|SFS_O_NOWAIT|SFS_O_RESET));
+   int retc, i, blen, privs, opcode = cmd & SFS_FSCTL_CMD;
    const char *tident = einfo.getErrUser();
    char *bP, *cP;
    XTRACE(fsctl, args, "");
@@ -1985,7 +2064,7 @@ int XrdOfs::Emsg(const char    *pfx,    // Message prefix value
                  const char    *op,     // Operation being performed
                  const char    *target) // The target (e.g., fname)
 {
-   char *etext, buffer[MAXPATHLEN+80], unkbuff[64];
+   char buffer[MAXPATHLEN+80];
 
 // If the error is EBUSY then we just need to stall the client. This is
 // a hack in order to provide for proxy support
@@ -1997,14 +2076,9 @@ int XrdOfs::Emsg(const char    *pfx,    // Message prefix value
 //
    if (ecode == ETIMEDOUT) return OSSDelay;
 
-// Get the reason for the error
-//
-   if (!(etext = OfsEroute.ec2text(ecode))) 
-      {sprintf(unkbuff, "reason unknown (%d)", ecode); etext = unkbuff;}
-
 // Format the error message
 //
-    snprintf(buffer,sizeof(buffer),"Unable to %s %s; %s", op, target, etext);
+   XrdOucERoute::Format(buffer, sizeof(buffer), ecode, op, target);
 
 // Print it out if debugging is enabled
 //
@@ -2177,7 +2251,7 @@ void XrdOfs::Unpersist(XrdOfsHandle *oh, int xcev)
 
 char *XrdOfs::WaitTime(int stime, char *buff, int blen)
 {
-   int mlen, hr, min, sec;
+   int hr, min, sec;
 
 // Compute hours, minutes, and seconds
 //
@@ -2189,17 +2263,17 @@ char *XrdOfs::WaitTime(int stime, char *buff, int blen)
 // Now format the message based on time duration
 //
         if (!hr && !min)
-           mlen = snprintf(buff,blen,"%d second%s",sec,(sec > 1 ? "s" : ""));
+           snprintf(buff,blen,"%d second%s",sec,(sec > 1 ? "s" : ""));
    else if (!hr)
           {if (sec > 10) min++;
-           mlen = snprintf(buff,blen,"%d minute%s",min,(min > 1 ? "s" : ""));
+           snprintf(buff,blen,"%d minute%s",min,(min > 1 ? "s" : ""));
           }
    else   {if (hr == 1)
               if (min <= 30)
-                      mlen = snprintf(buff,blen,"%d minutes",min+60);
-                 else mlen = snprintf(buff,blen,"%d hour and %d minutes",hr,min);
+                      snprintf(buff,blen,"%d minutes",min+60);
+                 else snprintf(buff,blen,"%d hour and %d minutes",hr,min);
               else {if (min > 30) hr++;
-                      mlen = snprintf(buff,blen,"%d hours",hr);
+                      snprintf(buff,blen,"%d hours",hr);
                    }
           }
 

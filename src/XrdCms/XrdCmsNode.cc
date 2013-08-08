@@ -62,12 +62,12 @@
 
 #include "XrdOss/XrdOss.hh"
 
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdOuc/XrdOucName2Name.hh"
 #include "XrdOuc/XrdOucProg.hh"
 #include "XrdOuc/XrdOucPup.hh"
-#include "XrdOuc/XrdOucTokenizer.hh"
 #include "XrdOuc/XrdOucUtils.hh"
+
+#include "XrdNet/XrdNetUtils.hh"
 
 #include "XrdSys/XrdSysPlatform.hh"
 
@@ -93,7 +93,6 @@ XrdCmsNode::XrdCmsNode(XrdLink *lnkp, int port,
     static int           iNum = 1;
 
     Link     =  lnkp;
-    IPAddr   =  0;
     NodeMask =  (id < 0 ? 0 : smask_1 << id);
     NodeID   = id;
     isDisable=  0;
@@ -139,8 +138,9 @@ XrdCmsNode::XrdCmsNode(XrdLink *lnkp, int port,
     ConfigID =  0;
     TZValid  = 0;
     TimeZone = 0;
+    IPV6Len = 0; *IPV6 = 0; IPV4Len = 0; *IPV4 = 0;
 
-// setName() will set Ident, IPAddr, IPV6, myName, myNlen, & Port!
+// setName() will set Ident, netID, IPV6, myName, myNlen, & Port!
 //
    setName(lnkp, (nid ? port : 0));
 
@@ -171,26 +171,24 @@ XrdCmsNode::~XrdCmsNode()
   
 void XrdCmsNode::setName(XrdLink *lnkp, int port)
 {
-   struct sockaddr netaddr;
-   char *bp, buff[512];
+   char buff[512];
    const char *hname = lnkp->Host();
-   unsigned int hAddr;
+   int oldPort = 0, fmtOpts = XrdNetAddr::old6Map4;
 
-// Get our address (the long way)
-//
-   lnkp->Name(&netaddr);
-   hAddr= XrdSysDNS::IPAddr(&netaddr);
-
-// Check if this is a duplicate
+// Check if this is a duplicate. Note that we check for strict equivalence.
 //
    if (myName)
-      {if (!strcmp(myName, hname) && port == Port && hAddr == IPAddr) return;
-          else free(myName);
+      {if (!strcmp(myName,hname) && port == Port && netID.Same(lnkp->NetAddr()))
+          return;
+       free(myName);
       }
+
+// Get our address information but substitute data port for actual port
+//
+   netID = *(lnkp->NetAddr());
 
 // Construct our identification
 //
-   IPAddr = hAddr;
    myName = strdup(hname);
    myNlen = strlen(hname)+1;
    Port = port;
@@ -200,28 +198,32 @@ void XrdCmsNode::setName(XrdLink *lnkp, int port)
    if (Ident) free(Ident);
    Ident = strdup(buff);
 
-   strcpy(IPV6, "[::");
-   bp = IPV6+3;
-   bp += XrdSysDNS::IP2String(IPAddr, 0, bp, 24); // We're cheating
-   *bp++ = ']';
-   if (Port) {*bp++ = ':'; bp += sprintf(bp, "%d", Port);}
-   IPV6Len = bp - IPV6;
-}
+   if (!Port) fmtOpts |= XrdNetAddr::noPort;
+      else oldPort = netID.Port(Port);
 
-/*
- * Given a buffer and length, copy the IPV6 address to the buffer.
- * Returns the number of bytes copied, excluding the nul-terminator.
- * If the buffer is too small, returns 0 and the contents of result_buffer
- * will not be touched.
- */
-int XrdCmsNode::getName(char * result_buffer, size_t buffer_length) const
-{
-   if (buffer_length <= IPV6Len)
-      return 0;
-   strncpy(result_buffer, IPV6, IPV6Len);
-   result_buffer[IPV6Len] = '\0'; // This is not an off-by-one error as IPV6 is 
-                                  // not guaranteed to be zero-padded.
-   return IPV6Len;
+// Format out the address in IPv6 format
+//
+   netID.Format(buff, sizeof(buff), XrdNetAddr::fmtAdv6, fmtOpts);
+   if (oldPort) netID.Port(oldPort);
+   strlcpy(IPV6, buff, sizeof(IPV6));
+   IPV6Len = strlen(IPV6);
+
+// If this is an IPv6 address then try to find it's ipV4 address
+//
+   if (netID.isIPType(XrdNetAddrInfo::IPv6) && !netID.isMapped())
+      {XrdNetAddr *iP;
+       int iN;
+       if (!XrdNetUtils::GetAddrs(hname,&iP,iN,XrdNetUtils::onlyIPv4,0) && iN)
+          {iP[0].Port(Port);
+           iP[0].Format(buff,sizeof(buff),XrdNetAddr::fmtAdv6,fmtOpts);
+           strlcpy(IPV4, buff, sizeof(IPV4));
+           IPV4Len = strlen(IPV4);
+           delete [] iP;
+          }
+      } else {
+       strlcpy(IPV4, IPV6, sizeof(IPV4));
+       IPV4Len = IPV6Len;
+      }
 }
 
 /******************************************************************************/
@@ -519,7 +521,9 @@ const char *XrdCmsNode::do_Locate(XrdCmsRRData &Arg)
                           {(char *)&Resp,        0}};
    const char *Why;
    char theopts[8], *toP = theopts;
-   int rc, bytes;
+   XrdCmsCluster::CmsLSOpts lsopts = XrdCmsCluster::LS_NULL;
+   int rc, bytes, nsel;
+   bool lsall = (*Arg.Path == '*');
 
 // Do a callout to the external manager if we have one
 //
@@ -556,13 +560,27 @@ const char *XrdCmsNode::do_Locate(XrdCmsRRData &Arg)
           }
       } else {Why = "?"; bytes = 0;}
 
+// Get the right options
+//
+   if (Arg.Opts & CmsLocateRequest::kYR_retipv4)
+      lsopts |= XrdCmsCluster::LS_IP4;
+   if (Arg.Opts & CmsLocateRequest::kYR_retipv6)
+      lsopts |= XrdCmsCluster::LS_IP6;
+
 // List the servers
 //
    if (!rc)
-      {if (!Sel.Vec.hf || !(sP=Cluster.List(Sel.Vec.hf,XrdCmsCluster::LS_IPO)))
-          {Arg.Request.rrCode = kYR_error;
-           rc = kYR_ENOENT; Why = "none ";
-           bytes = strlcpy(Resp.outbuff, "No servers have the file",
+      {if (!Sel.Vec.hf || !(sP=Cluster.List(Sel.Vec.hf, lsopts, nsel)))
+          {const char *eTxt;
+           Arg.Request.rrCode = kYR_error;
+           if (nsel)
+              {rc = kYR_ENETUNREACH; Why = "unreachable ";
+               eTxt = "No servers are reachable via ipv4";
+              } else {
+               rc = kYR_ENOENT; Why = "none ";
+               eTxt = "No servers have the file";
+              }
+           bytes = strlcpy(Resp.outbuff, eTxt,
                           sizeof(Resp.outbuff)) + sizeof(Resp.Val) + 1;
           } else rc = 0;
       }
@@ -573,7 +591,8 @@ const char *XrdCmsNode::do_Locate(XrdCmsRRData &Arg)
       {Resp.Val           = htonl(rc);
        DEBUGR(Why <<Arg.Path);
       } else {
-       bytes=do_LocFmt(Resp.outbuff,sP,Sel.Vec.pf,Sel.Vec.wf)+sizeof(Resp.Val)+1;
+       bytes = do_LocFmt(Resp.outbuff, sP, Sel.Vec.pf, Sel.Vec.wf, lsall)
+             + sizeof(Resp.Val)+1;
        Resp.Val            = 0;
        Arg.Request.rrCode  = kYR_data;
       }
@@ -591,9 +610,11 @@ const char *XrdCmsNode::do_Locate(XrdCmsRRData &Arg)
 /******************************************************************************/
   
 int XrdCmsNode::do_LocFmt(char *buff, XrdCmsSelected *sP,
-                          SMask_t pfVec, SMask_t wfVec)
+                          SMask_t pfVec, SMask_t wfVec, bool lsall)
 {
    static const int Skip = (XrdCmsSelected::Disable | XrdCmsSelected::Offline);
+   static const int Hung = (XrdCmsSelected::Disable | XrdCmsSelected::Offline
+                         |  XrdCmsSelected::Suspend);
    XrdCmsSelected *pP;
    char *oP = buff;
 
@@ -601,6 +622,16 @@ int XrdCmsNode::do_LocFmt(char *buff, XrdCmsSelected *sP,
 // 01234567810123456789212345678
 // xy[::123.123.123.123]:123456
 //
+if (lsall)
+   while(sP)
+        {*oP = (sP->Status & XrdCmsSelected::isMangr ? 'M' : 'S');
+         if (sP->Status & Hung) *oP = tolower(*oP);
+         *(oP+1) = (sP->Mask   & wfVec               ? 'w' : 'r');
+         strcpy(oP+2, sP->IPV6); oP += sP->IPV6Len + 2;
+         if (sP->next) *oP++ = ' ';
+         pP = sP; sP = sP->next; delete pP;
+        }
+   else
    while(sP)
         {if (!(sP->Status & Skip))
             {*oP     = (sP->Status & XrdCmsSelected::isMangr ? 'M' : 'S');
@@ -961,14 +992,14 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
        if (Xmi_Select->Select(&Req, opts, Arg.Path, Arg.Opaque)) return 0;
       }
 
-// See if the XMI provides preferences for the file staging location.
+   // See if the XMI provides preferences for the file staging location.
    XrdCmsPref pref;
    if (Xmi_Pref)
-      {XrdCmsPrefNodes node_prefs;
+     {XrdCmsPrefNodes node_prefs;
        Cluster.FillInPrefs(node_prefs);
        XrdCmsReq Req(this, Arg.Request.streamid);
        if (Xmi_Pref->Pref(&Req, Arg.Path, Arg.Opaque, pref, node_prefs)) return 0;
-      }
+     }
 
 // Init select data (note that refresh supresses fast redirects)
 //
@@ -1000,14 +1031,14 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
 //
    Sel.nmask = SMask_t(0);
    if ((Avoid = Arg.Avoid))
-      {unsigned int IPaddr;
+      {XrdNetAddr avoidAddr;
        char *Comma;
        DEBUGR(theopts <<' ' <<Arg.Path <<" avoiding " <<Avoid);
        Sel.InfoP = 0;
        do {if ((Comma = index(Avoid,','))) *Comma = '\0';
            if (*Avoid == '+') Sel.nmask |= Cluster.getMask(Avoid+1);
-              else if (XrdSysDNS::Host2IP(Avoid, &IPaddr))
-                              Sel.nmask |= Cluster.getMask(IPaddr);
+              else if (!avoidAddr.Set(Avoid,0))
+                              Sel.nmask |= Cluster.getMask(&avoidAddr);
            Avoid = Comma+1;
           } while(Comma && *Avoid);
       } else DEBUGR(theopts <<' ' <<Arg.Path);
@@ -1217,7 +1248,7 @@ void XrdCmsNode::do_StateDFS(XrdCmsBaseFR *rP, int rc)
 {
    EPNAME("StateDFs");
    static const SMask_t allNodes(~0);
-   CmsRRHdr Request = {rP->Sid, 0, rP->Mod | kYR_raw};
+   CmsRRHdr Request = {rP->Sid, 0, (kXR_char)(rP->Mod | kYR_raw), 0};
    XrdCmsSelect Sel(0, rP->Path, rP->PathLen);
    int isNew;
 
@@ -1557,22 +1588,14 @@ const char *XrdCmsNode::do_Trunc(XrdCmsRRData &Arg)
 const char *XrdCmsNode::do_Try(XrdCmsRRData &Arg)
 {
    EPNAME("do_Try")
-   XrdOucTokenizer theList(Arg.Path);
-   char *tp;
 
 // Do somde debugging
 //
    DEBUGR(Arg.Path);
 
-// Delete any additions from this manager
-//
-   myMans.Del(IPAddr);
-
 // Add all the alternates to our alternate list
 //
-   tp = theList.GetLine();
-   while((tp = theList.GetToken()))
-         myMans.Add(IPAddr, tp, Config.PortTCP, myLevel);
+   myMans.Add(&netID, Arg.Path, Config.PortTCP, myLevel);
 
 // Close the link and return an error
 //

@@ -42,12 +42,23 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #endif
-#include "XrdSys/XrdSysDNS.hh"
+#include "XrdNet/XrdNetUtils.hh"
+#include "XrdOuc/XrdOucUtils.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysPlatform.hh"
 #include "XrdOuc/XrdOucStream.hh"
-#include "XrdOuc/XrdOucUtils.hh"
   
+/******************************************************************************/
+/*                              e n d s W i t h                               */
+/******************************************************************************/
+  
+bool XrdOucUtils::endsWith(const char *text, const char *ending, int endlen)
+{
+   int tlen = strlen(text);
+
+   return (tlen >= endlen && !strcmp(text+(tlen-endlen), ending));
+}
+
 /******************************************************************************/
 /*                                 e T e x t                                  */
 /******************************************************************************/
@@ -105,7 +116,7 @@ int XrdOucUtils::doIf(XrdSysError *eDest, XrdOucStream &Config,
 // Check if we are one of the listed hosts
 //
    if (!is1of(val, brk))
-      {do {hostok = XrdSysDNS::isMatch(hname, val);
+      {do {hostok = XrdNetUtils::Match(hname, val);
            val = Config.GetWord();
           } while(!hostok && val && !is1of(val, brk));
       if (hostok)
@@ -276,15 +287,17 @@ char *XrdOucUtils::Ident(long long  &mySID, char *iBuff, int iBlen,
                          const char *iHost, const char *iProg,
                          const char *iName, int Port)
 {
+   const char *sP;
    char sName[64], uName[256];
    long long urSID;
-   int  n, myPid;
+   int  myPid;
 
 // Generate our server ID
 //
    myPid   = static_cast<int>(getpid());
    urSID   = static_cast<long long>(myPid)<<16ll | Port;
    sprintf(sName, "%lld", urSID);
+   if (!(sP = getenv("XRDSITE"))) sP = "";
 
 // Get our username
 //
@@ -293,8 +306,8 @@ char *XrdOucUtils::Ident(long long  &mySID, char *iBuff, int iBlen,
 
 // Create identification record
 //
-   snprintf(iBuff, iBlen, "%s.%d:%s@%s\n&pgm=%s&inst=%s&port=%d",
-                          uName, myPid, sName, iHost, iProg, iName, Port);
+   snprintf(iBuff, iBlen, "%s.%d:%s@%s\n&pgm=%s&inst=%s&port=%d&site=%s",
+                          uName, myPid, sName, iHost, iProg, iName, Port, sP);
 
 // Return a copy of the sid
 //

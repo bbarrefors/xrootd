@@ -29,42 +29,42 @@
 /******************************************************************************/
 
 #include <errno.h>
+#include <cstdio>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/socket.h>
 #include <sys/types.h>
 #if !defined(__macos__) && !defined(__FreeBSD__)
 #include <malloc.h>
 #endif
 
-#include "XrdNet/XrdNet.hh"
-#include "XrdNet/XrdNetPeer.hh"
+#include "XrdVersion.hh"
+
+#include "XrdNet/XrdNetMsg.hh"
 #include "XrdOuc/XrdOucEnv.hh"
 #include "XrdOuc/XrdOucUtils.hh"
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysPlatform.hh"
 
 #include "Xrd/XrdScheduler.hh"
 #include "XrdXrootd/XrdXrootdMonitor.hh"
+#include "XrdXrootd/XrdXrootdMonFile.hh"
 #include "XrdXrootd/XrdXrootdTrace.hh"
 
 /******************************************************************************/
 /*                     S t a t i c   A l l o c a t i o n                      */
 /******************************************************************************/
-  
+
 XrdScheduler      *XrdXrootdMonitor::Sched      = 0;
 XrdSysError       *XrdXrootdMonitor::eDest      = 0;
 char              *XrdXrootdMonitor::idRec      = 0;
 int                XrdXrootdMonitor::idLen      = 0;
-int                XrdXrootdMonitor::monFD;
 char              *XrdXrootdMonitor::Dest1      = 0;
 int                XrdXrootdMonitor::monMode1   = 0;
-struct sockaddr    XrdXrootdMonitor::InetAddr1;
+XrdNetMsg         *XrdXrootdMonitor::InetDest1  = 0;
 char              *XrdXrootdMonitor::Dest2      = 0;
 int                XrdXrootdMonitor::monMode2   = 0;
-struct sockaddr    XrdXrootdMonitor::InetAddr2;
+XrdNetMsg         *XrdXrootdMonitor::InetDest2  = 0;
 XrdXrootdMonitor  *XrdXrootdMonitor::altMon     = 0;
 XrdSysMutex        XrdXrootdMonitor::windowMutex;
 kXR_int32          XrdXrootdMonitor::startTime  = 0;
@@ -98,6 +98,8 @@ char               XrdXrootdMonitor::monREDR    = 0;
 char               XrdXrootdMonitor::monUSER    = 0;
 char               XrdXrootdMonitor::monAUTH    = 0;
 char               XrdXrootdMonitor::monACTIVE  = 0;
+char               XrdXrootdMonitor::monFSTAT   = 0;
+char               XrdXrootdMonitor::monCLOCK   = 0;
 
 /******************************************************************************/
 /*                               G l o b a l s                                */
@@ -131,9 +133,6 @@ class XrdXrootdMonitor_Ident : public XrdJob
 public:
 
 void          DoIt() {
-#ifndef NODEBUG
-                      const char *TraceID = "MonIdent";
-#endif
                       XrdXrootdMonitor::Ident();
                       Sched->Schedule((XrdJob *)this, time(0)+idInt);
                      }
@@ -365,35 +364,6 @@ void XrdXrootdMonitor::Close(kXR_unt32 dictid, long long rTot, long long wTot)
 }
 
 /******************************************************************************/
-/*                                  D i s c                                   */
-/******************************************************************************/
-
-void XrdXrootdMonitor::Disc(kXR_unt32 dictid, int csec, char Flags)
-{
-  XrdXrootdMonitorLock mLock(this);
-
-// Check if this should not be included in the io trace
-//
-   if (this != altMon && monUSER == 1 && altMon)
-      {altMon->Disc(dictid, csec); return;}
-
-// Fill out the monitor record (let compiler cast the data correctly)
-//
-   if (lastWindow != currWindow) Mark();
-      else if (nextEnt == lastEnt) Flush();
-   monBuff->info[nextEnt].arg0.rTot[0]  = 0;
-   monBuff->info[nextEnt].arg0.id[0]    = XROOTD_MON_DISC;
-   monBuff->info[nextEnt].arg0.id[1]    = Flags;
-   monBuff->info[nextEnt].arg1.wTot     = htonl(csec);
-   monBuff->info[nextEnt++].arg2.dictid = dictid;
-
-// Check if we need to duplicate this entry
-//
-   if (altMon && this != altMon && monUSER == 3)
-      altMon->Dup(&monBuff->info[nextEnt-1]);
-}
-
-/******************************************************************************/
 /*                              D e f a u l t s                               */
 /******************************************************************************/
 
@@ -430,6 +400,11 @@ void XrdXrootdMonitor::Defaults(char *dest1, int mode1, char *dest2, int mode2)
    monREDR   = (mmode & XROOTD_MON_REDR ? 1 : 0);
    monUSER   = (mmode & XROOTD_MON_USER ? 1 : 0);
    monAUTH   = (mmode & XROOTD_MON_AUTH ? 1 : 0);
+   monFSTAT  = (mmode & XROOTD_MON_FSTA && monFSTAT ? 1 : 0);
+
+// Compute whether or not we need the clock running
+//
+   if (monREDR || (isEnabled > 0 && (monIO || monFILE))) monCLOCK = 1;
 
 // Check where user information should go
 //
@@ -453,7 +428,8 @@ void XrdXrootdMonitor::Defaults(char *dest1, int mode1, char *dest2, int mode2)
 /******************************************************************************/
 
 void XrdXrootdMonitor::Defaults(int msz,   int rsz,   int wsz,
-                                int flush, int flash, int idt, int rnm)
+                                int flush, int flash, int idt, int rnm,
+                                int fsint, int fsopt, int fsion)
 {
 
 // Set default window size and flush time
@@ -465,6 +441,11 @@ void XrdXrootdMonitor::Defaults(int msz,   int rsz,   int wsz,
    rdrNum     = (rnm   <= 0 || rnm > rdrMax ? 3 : rnm);
    rdrWin     = (sizeWindow > 16777215 ? 16777215 : sizeWindow);
    rdrWin     = htonl(rdrWin);
+
+// Set the fstat defaults
+//
+   XrdXrootdMonFile::Defaults(fsint, fsopt, fsion);
+   monFSTAT = fsint != 0;
 
 // Set default monitor buffer size
 //
@@ -482,6 +463,35 @@ void XrdXrootdMonitor::Defaults(int msz,   int rsz,   int wsz,
    lastRnt = (rsz-(sizeof(XrdXrootdMonHeader) + 16))/sizeof(XrdXrootdMonRedir);
    monRlen =  (lastRnt*sizeof(XrdXrootdMonRedir))+sizeof(XrdXrootdMonHeader)+16;
    lastRnt--;
+}
+
+/******************************************************************************/
+/*                                  D i s c                                   */
+/******************************************************************************/
+
+void XrdXrootdMonitor::Disc(kXR_unt32 dictid, int csec, char Flags)
+{
+  XrdXrootdMonitorLock mLock(this);
+
+// Check if this should not be included in the io trace
+//
+   if (this != altMon && monUSER == 1 && altMon)
+      {altMon->Disc(dictid, csec); return;}
+
+// Fill out the monitor record (let compiler cast the data correctly)
+//
+   if (lastWindow != currWindow) Mark();
+      else if (nextEnt == lastEnt) Flush();
+   monBuff->info[nextEnt].arg0.rTot[0]  = 0;
+   monBuff->info[nextEnt].arg0.id[0]    = XROOTD_MON_DISC;
+   monBuff->info[nextEnt].arg0.id[1]    = Flags;
+   monBuff->info[nextEnt].arg1.wTot     = htonl(csec);
+   monBuff->info[nextEnt++].arg2.dictid = dictid;
+
+// Check if we need to duplicate this entry
+//
+   if (altMon && this != altMon && monUSER == 3)
+      altMon->Dup(&monBuff->info[nextEnt-1]);
 }
   
 /******************************************************************************/
@@ -526,10 +536,9 @@ int XrdXrootdMonitor::Init(XrdScheduler *sp,    XrdSysError *errp,
 {
    static     XrdXrootdMonitor_Ident MonIdent(sp, monIdent);
    XrdXrootdMonMap *mP;
-   XrdNet     myNetwork(errp, 0);
-   XrdNetPeer monDest;
-   char      *etext, iBuff[1024], *sName, *cP;
+   char       iBuff[1024], iPuff[1024], *sName, *cP;
    int        i, Now = time(0);
+   bool       aOK;
 
 // Set static variables
 //
@@ -539,8 +548,9 @@ int XrdXrootdMonitor::Init(XrdScheduler *sp,    XrdSysError *errp,
 
 // Generate our server ID
 //
+   sprintf(iPuff, "%s&ver=%s", iProg, XrdVERSION);
    sName = XrdOucUtils::Ident(mySID, iBuff, sizeof(iBuff),
-                              iHost, iProg, iName, Port);
+                              iHost, iPuff, iName, Port);
    cP = (char *)&mySID; *cP = 0; *(cP+1) = 0;
    sidSize = strlen(sName);
    if (sidSize >= (int)sizeof(sidName)) sName[sizeof(sidName)-1] = 0;
@@ -551,23 +561,22 @@ int XrdXrootdMonitor::Init(XrdScheduler *sp,    XrdSysError *errp,
 //
    if (!isEnabled) return 1;
 
-// Allocate a socket for the primary destination
+// Setup the primary destination
 //
-   if (!myNetwork.Relay(monDest, Dest1, XRDNET_SENDONLY)) return 0;
-   monFD = monDest.fd;
-
-// Get the address of the primary destination
-//
-   if (!XrdSysDNS::Host2Dest(Dest1, InetAddr1, &etext))
-      {eDest->Emsg("Monitor", "setup monitor collector;", etext);
+   InetDest1 = new XrdNetMsg(eDest, Dest1, &aOK);
+   if (!aOK)
+      {eDest->Emsg("Monitor", "Unable to setup primary monitor collector.");
        return 0;
       }
 
-// Get the address of the alternate destination, if we happen to have one
+// Setup the secondary destination
 //
-   if (Dest2 && !XrdSysDNS::Host2Dest(Dest2, InetAddr2, &etext))
-      {eDest->Emsg("Monitor", "setup monitor collector;", etext);
-       return 0;
+   if (Dest2)
+      {InetDest1 = new XrdNetMsg(eDest, Dest1, &aOK);
+       if (!aOK)
+          {eDest->Emsg("Monitor","Unable to setup secondary monitor collector.");
+           return 0;
+          }
       }
 
 // If there is a destination that is only collecting file events, then
@@ -583,7 +592,7 @@ int XrdXrootdMonitor::Init(XrdScheduler *sp,    XrdSysError *errp,
 
 // Turn on the monitoring clock if we need it running all the time
 //
-   if (isEnabled > 0 || monREDR) startClock();
+   if (monCLOCK) startClock();
 
 // Create identification record
 //
@@ -598,6 +607,11 @@ int XrdXrootdMonitor::Init(XrdScheduler *sp,    XrdSysError *errp,
 // Now schedule the first identification record
 //
    if (Sched && monIdent) Sched->Schedule((XrdJob *)&MonIdent);
+
+// If we are monitoring file stats then start that up
+//
+   if (!Sched || !monFSTAT) monFSTAT = 0;
+      else if (!XrdXrootdMonFile::Init(Sched, eDest)) return 0;
 
 // If we are not monitoring redirections, we are done!
 //
@@ -627,17 +641,14 @@ int XrdXrootdMonitor::Init(XrdScheduler *sp,    XrdSysError *errp,
 }
 
 /******************************************************************************/
-/*                                   M a p                                    */
+/* Private:                    G e t D i c t I D                              */
 /******************************************************************************/
   
-kXR_unt32 XrdXrootdMonitor::Map(char  code, XrdXrootdMonitor::User &uInfo,
-                                const char *path)
+kXR_unt32 XrdXrootdMonitor::GetDictID()
 {
-     static XrdSysMutex  seqMutex;
-     static unsigned int monSeqID = 1;
-     XrdXrootdMonMap     map;
-     int                 size, montype;
-     unsigned int        mySeqID;
+   static XrdSysMutex  seqMutex;
+   static unsigned int monSeqID = 1;
+   unsigned int        mySeqID;
 
 // Assign a unique ID for this entry
 //
@@ -645,9 +656,24 @@ kXR_unt32 XrdXrootdMonitor::Map(char  code, XrdXrootdMonitor::User &uInfo,
    mySeqID = monSeqID++;
    seqMutex.UnLock();
 
+// Return the ID
+//
+   return htonl(mySeqID);
+}
+
+/******************************************************************************/
+/* Private:                          M a p                                    */
+/******************************************************************************/
+  
+kXR_unt32 XrdXrootdMonitor::Map(char  code, XrdXrootdMonitor::User &uInfo,
+                                const char *path)
+{
+   XrdXrootdMonMap     map;
+   int                 size, montype;
+
 // Copy in the username and path
 //
-   map.dictid = htonl(mySeqID);
+   map.dictid = GetDictID();
    strcpy(map.info, uInfo.Name);
    size = uInfo.Len;
    if (path)
@@ -672,7 +698,6 @@ kXR_unt32 XrdXrootdMonitor::Map(char  code, XrdXrootdMonitor::User &uInfo,
 //
    return map.dictid;
 }
-  
   
 /******************************************************************************/
 /*                                  O p e n                                   */
@@ -1011,23 +1036,19 @@ int XrdXrootdMonitor::Send(int monMode, void *buff, int blen)
     int rc1, rc2;
 
     sendMutex.Lock();
-    if (monMode & monMode1) 
-       {rc1  = (int)sendto(monFD, buff, blen, 0,
-                        (const struct sockaddr *)&InetAddr1, sizeof(sockaddr));
-        rc1 = (rc1 < 0 ? -errno : 0);
+    if (monMode & monMode1 && InetDest1)
+       {rc1  = InetDest1->Send((char *)buff, blen);
         TRACE(DEBUG,blen <<" bytes sent to " <<Dest1 <<" rc=" <<rc1);
        }
        else rc1 = 0;
-    if (monMode & monMode2) 
-       {rc2 = (int)sendto(monFD, buff, blen, 0,
-                        (const struct sockaddr *)&InetAddr2, sizeof(sockaddr));
-        rc2 = (rc2 < 0 ? -errno : 0);
+    if (monMode & monMode2 && InetDest2)
+       {rc2  = InetDest2->Send((char *)buff, blen);
         TRACE(DEBUG,blen <<" bytes sent to " <<Dest2 <<" rc=" <<rc2);
        }
        else rc2 = 0;
     sendMutex.UnLock();
 
-    return (rc1 < rc2 ? rc1 : rc2);
+    return (rc1 ? rc1 : rc2);
 }
 
 /******************************************************************************/

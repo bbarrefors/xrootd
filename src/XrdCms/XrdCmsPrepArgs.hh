@@ -49,7 +49,7 @@ XrdCms::CmsRRHdr        Request;
         char           *prty;
         char           *mode;
         char           *path;
-        const char     *opaque;
+        char           *opaque;
         char           *clPath;   // ->coloc path, if any
         int             options;
         int             pathlen;  // Includes null byte

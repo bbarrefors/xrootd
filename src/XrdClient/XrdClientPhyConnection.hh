@@ -37,12 +37,11 @@
 //////////////////////////////////////////////////////////////////////////
 
 
-#include "XrdClient/XrdClientPSock.hh"
+#include "XrdClient/XrdClientSock.hh"
 #include "XrdClient/XrdClientMessage.hh"
 #include "XrdClient/XrdClientUnsolMsg.hh"
 #include "XrdClient/XrdClientInputBuffer.hh"
 #include "XrdClient/XrdClientUrlInfo.hh"
-#include "XrdClient/XrdClientThread.hh"
 #include "XrdSys/XrdSysPthread.hh"
 #include "XrdSys/XrdSysSemWait.hh"
 
@@ -64,6 +63,7 @@ enum ERemoteServerType {
 }; 
 
 class XrdClientSid;
+class XrdClientThread;
 class XrdSecProtocol;
 
 class XrdClientPhyConnection: public XrdClientUnsolMsgSender {

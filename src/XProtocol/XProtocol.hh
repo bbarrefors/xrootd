@@ -45,8 +45,8 @@
 // Protocol version is repesented as three base10 digits x.y.z with x having no
 // upper limit (i.e. n.9.9 + 1 -> n+1.0.0).
 //
-#define kXR_PROTOCOLVERSION  0x00000297
-#define kXR_PROTOCOLVSTRING "2.9.7"
+#define kXR_PROTOCOLVERSION  0x00000300
+#define kXR_PROTOCOLVSTRING "3.0.0"
 
 #include "XProtocol/XPtypes.hh"
 
@@ -134,6 +134,14 @@ enum XMkdirOptions {
 };
 
 // this is a bitmask
+enum XLoginAbility {
+   kXR_nothing =   0,
+   kXR_fullurl =   1,
+   kXR_multipr =   3,
+   kXR_readrdok=   4
+};
+
+// this is a bitmask
 enum XLoginCapVer {
    kXR_lcvnone = 0,
    kXR_vermask = 63,
@@ -165,7 +173,8 @@ enum XStatRespFlags {
 };
 
 enum XDirlistRequestOption {
-   kXR_online = 1
+   kXR_online = 1,
+   kXR_dstat  = 2
 };
 
 enum XOpenRequestOption {
@@ -176,13 +185,14 @@ enum XOpenRequestOption {
    kXR_open_read= 16,
    kXR_open_updt= 32,
    kXR_async    = 64,
-   kXR_refresh  = 128,
+   kXR_refresh  = 128,   // also locate
    kXR_mkpath   = 256,
+   kXR_prefname = 256,   // only locate
    kXR_open_apnd= 512,
    kXR_retstat  = 1024,
    kXR_replica  = 2048,
    kXR_posc     = 4096,
-   kXR_nowait   = 8192,
+   kXR_nowait   = 8192,  // also locate
    kXR_seqio    =16384
 };
 
@@ -196,7 +206,8 @@ enum XQueryType {
    kXR_Qconfig= 7,
    kXR_Qvisa  = 8,
    kXR_Qopaque=16,
-   kXR_Qopaquf=32
+   kXR_Qopaquf=32,
+   kXR_Qopaqug=64
 };
 
 enum XVerifyType {
@@ -362,8 +373,9 @@ struct ClientLoginRequest {
    kXR_unt16 requestid;
    kXR_int32 pid;
    kXR_char username[8];
-   kXR_char reserved[2];
-   kXR_char capver[1];
+   kXR_char reserved;
+   kXR_char ability;       // See XLoginAbility enum flags
+   kXR_char capver[1];     // See XLoginCapVer  enum flags
    kXR_char role[1];
    kXR_int32  dlen;
 };

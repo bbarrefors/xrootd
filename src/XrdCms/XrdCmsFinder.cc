@@ -33,23 +33,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <signal.h>
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/shm.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/times.h>
 #include <sys/types.h>
 #include <sys/uio.h>
-#include <sys/un.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <inttypes.h>
 
-#include <sstream>
- 
 #include "XrdVersion.hh"
   
 #include "XProtocol/YProtocol.hh"
@@ -329,41 +323,29 @@ int XrdCmsFinderRMT::Locate(XrdOucErrInfo &Resp, const char *path, int flags,
    static const int xNum   = 12;
 
    XrdCmsRRData   Data;
-   int            iovcnt;
+   int            n, iovcnt;
    char           Work[xNum*12];
    struct iovec   xmsg[xNum];
-
-// Try to pass along the client hostname
-//
-  const char * opaque = NULL;
-  std::string opaque_str;
-  if (Env)
-     {int n;
-      const XrdSecEntity * sec = Env->secEnv();
-      if (sec && sec->host && sec->host[0])
-         {const char * env = Env->Env(n);
-          std::stringstream ss;
-          if (env && env[0] != '\0')
-             ss << Env->Env(n);
-          if (!Env->Get("client_host"))
-             ss << "&client_host=" << sec->host;
-          opaque_str = ss.str();
-          opaque = opaque_str.c_str();
-         }
-     }
 
 // Fill out the RR data structure
 //
    Data.Ident   = (char *)(XrdCmsClientMan::doDebug ? Resp.getErrUser() : "");
    Data.Path    = (char *)path;
-   Data.Opaque  = opaque;
+   Data.Opaque  = (Env ? Env->Env(n)       : 0);
    Data.Avoid   = (Env ? Env->Get("tried") : 0);
 
 // Set options and command
 //
    if (flags & SFS_O_LOCATE)
       {Data.Request.rrCode = kYR_locate;
-       Data.Opts = (flags & SFS_O_NOWAIT ? CmsLocateRequest::kYR_asap    : 0);
+       Data.Opts = (flags & SFS_O_NOWAIT ? CmsLocateRequest::kYR_asap    : 0)
+                 | (flags & SFS_O_RESET  ? CmsSelectRequest::kYR_refresh : 0);
+       if (Resp.getUCap() & XrdOucEI::uIPv4)
+          Data.Opts |= CmsLocateRequest::kYR_retipv4;
+       if (flags & SFS_O_FORCE)
+          Data.Opts |= CmsLocateRequest::kYR_retipv6;
+       if (flags & SFS_O_HNAME)
+          Data.Opts |= CmsLocateRequest::kYR_retname;
       } else
   {     Data.Request.rrCode = kYR_select;
         if (flags & SFS_O_TRUNC) Data.Opts = CmsSelectRequest::kYR_trunc;
@@ -674,7 +656,7 @@ int XrdCmsFinderRMT::StartManagers(XrdOucTList *theManList)
          if (myManagers) mp->setNext(myManagers);
             else firstone = mp;
          myManagers = mp;
-         if (XrdSysThread::Run(&tid,XrdCmsStartManager,(void *)mp,0,tp->text))
+         if (XrdSysThread::Run(&tid,XrdCmsStartManager,(void *)mp,0,mp->Name()))
             Say.Emsg("Finder", errno, "start manager");
          tp = tp->next; i++;
         }
@@ -898,7 +880,6 @@ int XrdCmsFinderTRG::RunAdmin(char *Path)
 void *XrdCmsFinderTRG::Start()
 {
    XrdCmsRRData Data;
-   int retc;
 
 // First step is to connect to the local cmsd. We also establish a binary
 // read stream (old olbd's never used it) to get requests that can only be
@@ -910,7 +891,7 @@ void *XrdCmsFinderTRG::Start()
              // Login to cmsd
              //
              myData.Lock();
-             retc = CMSp->Put(Login);
+             CMSp->Put(Login);
              myData.UnLock();
 
              // Get the FD for this connection

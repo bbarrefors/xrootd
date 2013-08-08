@@ -139,10 +139,33 @@ long long  addOffset(long long offs, int updtSz=0)
 
 long long   FSize() {return stat.size;}
 
-const char *Path() {return XClient->GetCurrentUrl().GetUrl().c_str();}
+const char *Path();
 
 int         Read (char *Buff, long long Offs, int Len)
                 {return XClient->Read (Buff, Offs, Len);}
+
+int         ReadV (const XrdOucIOVec *readV, int n)
+{
+   size_t nbytes = 0;
+   std::vector<long long> offsets; offsets.reserve(n);
+   std::vector<int> lens; lens.reserve(n);
+   for (int i=0; i<n; i++)
+      {nbytes += readV[i].size;
+       offsets[i] = readV[i].offset;
+       lens[i] = readV[i].size;
+      }
+   std::vector<char> result_buffer;
+   result_buffer.reserve(nbytes);
+   ssize_t retval = XClient->ReadV(&(result_buffer[0]), &(offsets[0]), &(lens[0]), n);
+   if (retval < 0)
+       return retval;
+   nbytes = 0;
+   for (int i=0; i<n; i++)
+      {memcpy(readV[i].data, &(result_buffer[nbytes]), readV[i].size);
+       nbytes += readV[i].size;
+      }
+   return nbytes;
+}
 
 int         Sync() {return (XClient->Sync() ? 0 : -1);}
 
@@ -169,6 +192,7 @@ void       OpenComplete(XrdClientAbs *clientP, void *cbArg, bool res)
 XrdClientStatInfo stat;
 XrdPosixCallBack *theCB;
 XrdPosixFile     *Next;
+char             *fPath;
 int               FD;
 int               cbResult;
 
@@ -375,6 +399,7 @@ XrdPosixFile::XrdPosixFile(int fd, const char *path, int oMode,
              : XCio((XrdOucCacheIO *)this),
                theCB(cbP),
                Next(0),
+               fPath(0),
                FD(fd),
                cbResult(0),
                currOffset(0),
@@ -419,6 +444,7 @@ XrdPosixFile::~XrdPosixFile()
        delete cP;
       }
    if (FD >= 0 && fdClose) close(FD);
+   if (fPath) free(fPath);
 }
 
 /******************************************************************************/
@@ -437,6 +463,16 @@ void XrdPosixFile::isOpen()
 // Indicate file needs to be closed
 //
    doClose = 1;
+}
+
+/******************************************************************************/
+/*                                  P a t h                                   */
+/******************************************************************************/
+  
+const char *XrdPosixFile::Path()
+{
+   if (!fPath) fPath = strdup(XClient->GetCurrentUrl().GetUrl().c_str());
+   return fPath;
 }
 
 /******************************************************************************/
@@ -829,7 +865,7 @@ int XrdPosixXrootd::Open(const char *path, int oflags, mode_t mode,
 //
    if (baseFD)
       {myMutex.Lock();
-       for (fd = freeFD; fd < baseFD && myFiles[fd]; fd++);
+       for (fd = freeFD; fd < baseFD && myFiles[fd]; fd++) {}
        if (fd >= baseFD || oflags & isStream) fd = lastFD;
           else freeFD = fd+1;
        doclose = 0;
@@ -1013,7 +1049,7 @@ ssize_t XrdPosixXrootd::Pread(int fildes, void *buf, size_t nbyte, off_t offset)
 //
    offs = static_cast<long long>(offset);
    bytes = fp->XCio->Read((char *)buf, offs, (int)iosz);
-   if (bytes < 0) return Fault(fp,-1);
+   if (bytes <= 0) return Fault(fp,-1);
 
 // All went well
 //
@@ -1076,7 +1112,7 @@ ssize_t XrdPosixXrootd::Read(int fildes, void *buf, size_t nbyte)
 // Issue the read
 //
    bytes = fp->XCio->Read((char *)buf,fp->Offset(),(int)iosz);
-   if (bytes < 0) return Fault(fp,-1);
+   if (bytes <= 0) return Fault(fp,-1);
 
 // All went well
 //
@@ -1106,6 +1142,29 @@ ssize_t XrdPosixXrootd::Readv(int fildes, const struct iovec *iov, int iovcnt)
 // All done
 //
    return totbytes;
+}
+
+/******************************************************************************/
+/*                                 V R e a d                                  */
+/******************************************************************************/
+
+ssize_t XrdPosixXrootd::VRead(int fildes, const XrdOucIOVec *readV, int n)
+{
+   XrdPosixFile *fp;
+
+// Find the file object
+//
+   if (!(fp = findFP(fildes))) return -1;
+
+// Issue the read
+//
+   ssize_t bytes = fp->XCio->ReadV(readV, n);
+   if (bytes < 0) return Fault(fp,-1);
+
+// All went well
+//
+   fp->UnLock();
+   return (ssize_t)bytes;
 }
 
 /******************************************************************************/
@@ -1312,7 +1371,7 @@ int XrdPosixXrootd::Statfs(const char *path, struct statfs *buf)
 
 // The vfs structure and fs structures should be size compatible (not really)
 //
-   memset(buf, 0, sizeof(buf));
+   memset(buf, 0, sizeof(struct statfs));
    buf->f_bsize   = myVfs.f_bsize;
    buf->f_blocks  = myVfs.f_blocks;
    buf->f_bfree   = myVfs.f_bfree;
@@ -1379,7 +1438,7 @@ int XrdPosixXrootd::Statvfs(const char *path, struct statvfs *buf)
 
 // Return what little we can
 //
-   memset(buf, 0, sizeof(buf));
+   memset(buf, 0, sizeof(struct statfs));
    buf->f_bsize   = 1024*1024;
    buf->f_frsize  = 1024*1024;
    buf->f_blocks  = static_cast<fsblkcnt_t>(rwBlks);
@@ -1553,6 +1612,7 @@ void XrdPosixXrootd::initEnv()
 // Now we must check if we have a new cache over-ride
 //
    if ((evar = getenv("XRDPOSIX_CACHE")) && *evar) initEnv(evar);
+      else if (myCache) {char ebuf[] = {0};        initEnv(ebuf);}
 }
 
 /******************************************************************************/

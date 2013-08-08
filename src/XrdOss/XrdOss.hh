@@ -37,6 +37,8 @@
 #include <sys/types.h>
 #include <string.h>
 
+#include "XrdOuc/XrdOucIOVec.hh"
+
 class XrdOucEnv;
 class XrdSysLogger;
 class XrdSfsAio;
@@ -60,6 +62,7 @@ public:
                 // Directory oriented methods
 virtual int     Opendir(const char *, XrdOucEnv &)           {return -ENOTDIR;}
 virtual int     Readdir(char *buff, int blen)                {return -ENOTDIR;}
+virtual int     StatRet(struct stat *buff)                   {return -ENOTSUP;}
 
                 // File oriented methods
 virtual int     Fchmod(mode_t mode)                          {return -EISDIR;}
@@ -77,6 +80,40 @@ virtual int     Read(XrdSfsAio *aoip)                        {return (ssize_t)-E
 virtual ssize_t ReadRaw(    void *, off_t, size_t)           {return (ssize_t)-EISDIR;}
 virtual ssize_t Write(const void *, off_t, size_t)           {return (ssize_t)-EISDIR;}
 virtual int     Write(XrdSfsAio *aiop)                       {return (ssize_t)-EISDIR;}
+
+// Implemented in the header, as many folks will be happy with the default.
+//
+virtual ssize_t ReadV(XrdOucIOVec *readV, int n)
+                     {ssize_t nbytes = 0, curCount = 0;
+                      for (int i=0; i<n; i++)
+                          {curCount = Read((void *)readV[i].data,
+                                            (off_t)readV[i].offset,
+                                           (size_t)readV[i].size);
+                           if (curCount != readV[i].size)
+                              {if (curCount < 0) return curCount;
+                               return -ESPIPE;
+                              }
+                           nbytes += curCount;
+                          }
+                      return nbytes;
+                     }
+
+// Implemented in the header, as many folks will be happy with the default.
+//
+virtual ssize_t WriteV(XrdOucIOVec *writeV, int n)
+                      {ssize_t nbytes = 0, curCount = 0;
+                       for (int i=0; i<n; i++)
+                           {curCount = Read((void *)writeV[i].data,
+                                             (off_t)writeV[i].offset,
+                                            (size_t)writeV[i].size);
+                            if (curCount != writeV[i].size)
+                               {if (curCount < 0) return curCount;
+                                return -ESPIPE;
+                               }
+                            nbytes += curCount;
+                           }
+                       return nbytes;
+                      }
 
                 // Methods common to both
 virtual int     Close(long long *retsz=0)=0;
@@ -105,8 +142,9 @@ int     fd;      // The associated file descriptor.
 
 // Options that can be passed to Stat()
 //
-#define XRDOSS_resonly 0x01
-#define XRDOSS_updtatm 0x02
+#define XRDOSS_resonly 0x0001
+#define XRDOSS_updtatm 0x0002
+#define XRDOSS_preop   0x0004
 
 // Class passed to StatVS()
 //
@@ -148,6 +186,8 @@ virtual int     Stat(const char *, struct stat *, int opts=0, XrdOucEnv *eP=0)=0
 virtual int     StatFS(const char *path, char *buff, int &blen, XrdOucEnv *eP=0)
                       {return -ENOTSUP;}
 virtual int     StatLS(XrdOucEnv &env, const char *cgrp, char *buff, int &blen)
+                      {return -ENOTSUP;}
+virtual int     StatPF(const char *, struct stat *)
                       {return -ENOTSUP;}
 virtual int     StatXA(const char *path, char *buff, int &blen, XrdOucEnv *eP=0)
                       {return -ENOTSUP;}

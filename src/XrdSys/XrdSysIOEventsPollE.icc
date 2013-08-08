@@ -97,7 +97,6 @@ XrdSys::IOEvents::Poller::newPoller(int          pipeFD[2],
 {
    static const int allocFD = 1024;
    struct epoll_event *pp, myEvent = {(EPOLLIN | EPOLLPRI), {0}};
-   Poller *myPoller;
    int pfd;
 
 // Open the /dev/poll driver
@@ -245,7 +244,7 @@ void XrdSys::IOEvents::PollE::Dispatch(XrdSys::IOEvents::Channel *cP,
 
 // Execute the callback
 //
-   if (!CbkXeq(cP, events, eNum, eTxt) || eNum) Exclude(cP, isLocked, 0);
+   if (!CbkXeq(cP, events, eNum, eTxt)) Exclude(cP, isLocked, 0);
 }
 
 /******************************************************************************/

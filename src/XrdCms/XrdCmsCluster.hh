@@ -33,15 +33,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <netinet/in.h>
   
 #include "XrdCms/XrdCmsTypes.hh"
 #include "XrdOuc/XrdOucTList.hh"
+#include "XrdOuc/XrdOucEnum.hh"
 #include "XrdSys/XrdSysPthread.hh"
 
 class XrdLink;
 class XrdCmsDrop;
 class XrdCmsNode;
 class XrdCmsSelect;
+class XrdNetAddr;
 class XrdCmsPrefNodes;
 class XrdCmsPref;
 
@@ -128,7 +131,7 @@ int             Broadsend(SMask_t smask, XrdCms::CmsRRHdr &Hdr,
 
 // Returns the node mask matching the given IP address
 //
-SMask_t         getMask(unsigned int IPv4adr);
+SMask_t         getMask(const XrdNetAddr *addr);
 
 // Returns the node mask matching the given cluster ID
 //
@@ -136,9 +139,9 @@ SMask_t         getMask(const char *Cid);
 
 // Extracts out node information. Opts are one or more of CmsLSOpts
 //
-enum            CmsLSOpts {LS_All = 0x0001, LS_IPO  = 0x0002};
+enum            CmsLSOpts {LS_NULL=0, LS_IP4=1, LS_IP6=2, LS_IPO=3, LS_All=8};
 
-XrdCmsSelected *List(SMask_t mask, CmsLSOpts opts);
+XrdCmsSelected *List(SMask_t mask, CmsLSOpts opts, int &nsel);
 
 // Returns the location of a file
 //
@@ -183,7 +186,7 @@ int             Statt(char *bfr, int bln); // Manager
 // Called to fill in the PrefNodes structure from our internal Nodes array.
 //
 int             FillInPrefs(XrdCmsPrefNodes & node_prefs);
-
+  
                 XrdCmsCluster();
                ~XrdCmsCluster() {} // This object should never be deleted
 
@@ -196,16 +199,18 @@ void        Record(char *path, const char *reason);
 int         Multiple(SMask_t mVec);
 enum        {eExists, eDups, eROfs, eNoRep, eNoEnt}; // Passed to SelFail
 int         SelFail(XrdCmsSelect &Sel, int rc);
-int         SelNode(XrdCmsSelect &Sel, SMask_t  pmask, SMask_t  amask, XrdCmsPref *prefs=NULL);
+  int         SelNode(XrdCmsSelect &Sel, SMask_t  pmask, SMask_t  amask, XrdCmsPref *prefs=NULL);
 XrdCmsNode *SelbyCost(SMask_t, int &, int &, const char **, int);
 XrdCmsNode *SelbyLoad(SMask_t, int &, int &, const char **, int);
 XrdCmsNode *SelbyRef (SMask_t, int &, int &, const char **, int);
 int         SelDFS(XrdCmsSelect &Sel, SMask_t amask,
                    SMask_t &pmask, SMask_t &smask, int isRW);
 void        sendAList(XrdLink *lp);
-void        setAltMan(int snum, unsigned int ipaddr, int port);
+void        setAltMan(int snum, XrdLink *lp, int port);
 
-static const  int AltSize = 24; // Number of IP:Port characters per entry
+// Number of IP:Port characters per entry
+//
+static const  int AltSize = INET6_ADDRSTRLEN+10;
 
 XrdSysMutex   cidMutex;         // Protects to cid list
 XrdOucTList  *cidFirst;         // Cluster ID to cluster number map
@@ -236,6 +241,8 @@ SMask_t       resetMask;        // Nodes to receive a reset event
 SMask_t       peerHost;         // Nodes that are acting as peers
 SMask_t       peerMask;         // Always ~peerHost
 };
+
+XRDOUC_ENUM_OPERATORS(XrdCmsCluster::CmsLSOpts)
 
 namespace XrdCms
 {

@@ -36,7 +36,6 @@
 #include <utime.h>
 #include <sys/param.h>
 #include <sys/types.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 
 #include "XrdFrc/XrdFrcCID.hh"
@@ -129,7 +128,7 @@ const char *XrdFrmTransfer::checkFF(const char *Path)
       {if (buf.st_ctime+Config.FailHold >= time(0))
           return "request previously failed";
        if (Config.Test) {DEBUG("would have removed '" <<Path <<"'");}
-          else {Config.ossFS->Unlink(Path, XRDOSS_isPFN);
+          else {unlink(Path);
                 DEBUG("removed '" <<Path <<"'");
                }
       }
@@ -156,7 +155,7 @@ const char *XrdFrmTransfer::Fetch()
    const char *eTxt, *retMsg = 0;
    char lfnpath[MAXPATHLEN+1024+512+8], *Lfn, Rfn[MAXPATHLEN+256], *theSrc;
    char pdBuff[1024];
-   int iXfr, pdSZ, lfnEnd, rc, isURL = 0;
+   int iXfr, pdSZ, lfnEnd, rc, isURL = 0, doRM = 0;
    long long fSize = 0;
 
 // The remote source is either the url-lfn or a translated lfn
@@ -184,7 +183,8 @@ const char *XrdFrmTransfer::Fetch()
 
 // Check if the file exists
 //
-   if (!stat(xfrP->PFN, &pfnStat))
+   Lfn = (xfrP->reqData.LFN)+xfrP->reqData.LFO;
+   if (!Config.Stat(Lfn, xfrP->PFN, &pfnStat))
       {DEBUG(xfrP->PFN <<" exists; not fetched.");
        return 0;
       }
@@ -192,7 +192,6 @@ const char *XrdFrmTransfer::Fetch()
 // Construct the file name to which to we originally transfer the data. This is
 // the lfn if we do not pre-allocate files and "lfn.anew" otherwise.
 //
-   Lfn = (xfrP->reqData.LFN)+xfrP->reqData.LFO;
    lfnEnd = strlen(Lfn);
    strlcpy(lfnpath, Lfn, sizeof(lfnpath)-8);
    if (Config.xfrCmd[iXfr].Opts & Config.cmdAlloc)
@@ -221,7 +220,8 @@ const char *XrdFrmTransfer::Fetch()
           {Say.Emsg("Fetch", rc, "create placeholder for", lfnpath);
            return "create failed";
           }
-      }
+       doRM = 1;
+      } else doRM = Config.xfrCmd[iXfr].Opts & Config.cmdRME;
 
 // Setup program monitoring data
 //
@@ -233,19 +233,20 @@ const char *XrdFrmTransfer::Fetch()
 //
    xfrET = time(0);
    if (!(rc = cmdArg.theCmd->Run(pdBuff, pdSZ)))
-      {if ((rc = stat(xfrP->PFN, &pfnStat)))
-          {Say.Emsg("Fetch", lfnpath, "fetched but not found!"); fSize = 0;}
+      {if ((rc = Config.Stat(lfnpath, xfrP->PFN, &pfnStat)))
+          {Say.Emsg("Fetch", lfnpath, "fetched but not resident!"); fSize = 0;}
           else {fSize  = pfnStat.st_size;
                 if (Config.xfrCmd[iXfr].Opts & Config.cmdAlloc)
                    FetchDone(lfnpath, pfnStat, rc);
                }
       }
 
-// Clean up if we failed otherwise tell the cmsd that we have a new file
+// Clean up if we failed otherwise tell the cmsd that we have a new file. Upon
+// failure we issue a a remove as we don't want the temp file to exist.
 //
    xfrP->PFN[xfrP->pfnEnd] = '\0';
    if (rc)
-      {Config.ossFS->Unlink(lfnpath);
+      {if (doRM) Config.ossFS->Unlink(lfnpath);
        ffMake(rc == -2);
        if (rc == -2) {xfrP->RetCode = 2; retMsg = "file not found";}
           else retMsg =  "fetch failed";
@@ -337,7 +338,7 @@ const char *XrdFrmTransfer::ffCheck()
 //
    if (Config.xfrFdir)
       {char ffPath[MAXPATHLEN+8];
-       if (Config.xfrFdln+xfrP->pfnEnd+5 >= sizeof(ffPath)) return 0;
+       if (Config.xfrFdln+xfrP->pfnEnd+5 >= int(sizeof(ffPath))) return 0;
        strcpy(ffPath, Config.xfrFdir);
        strcpy(ffPath+Config.xfrFdln, xfrP->PFN);
        strcpy(ffPath+Config.xfrFdln+xfrP->pfnEnd, ".fail");
@@ -367,7 +368,7 @@ void XrdFrmTransfer::ffMake(int nofile){
 // Generate fail file path
 //
    if (Config.xfrFdir)
-      {if (Config.xfrFdln+xfrP->pfnEnd+5 >= sizeof(ffPath)) return;
+      {if (Config.xfrFdln+xfrP->pfnEnd+5 >= int(sizeof(ffPath))) return;
        strcpy(ffPath, Config.xfrFdir);
        strcpy(ffPath+Config.xfrFdln, xfrP->PFN);
        strcpy(ffPath+Config.xfrFdln+xfrP->pfnEnd, ".fail");
@@ -617,9 +618,10 @@ const char *XrdFrmTransfer::Throw()
           else return "non-url copies not configured";
       }
 
-// Check if the file exists
+// Check if the file exists (we only copy resident files)
 //
-   if (stat(xfrP->PFN, &begStat)) return (xfrP->reqFQ ? "file not found" : 0);
+   if (Config.Stat(lfnpath+xfrP->reqData.LFO, xfrP->PFN, &begStat))
+      return (xfrP->reqFQ ? "file not found" : 0);
 
 // Check for a fail file
 //
@@ -670,7 +672,7 @@ const char *XrdFrmTransfer::Throw()
 // internally generated requests will simply be retried.
 //
    if (!rc)
-      {if ((rc = stat(xfrP->PFN, &endStat)))
+      {if ((rc = Config.Stat(lfnpath+xfrP->reqData.LFO, xfrP->PFN, &endStat)))
           {Say.Emsg("Throw", lfnpath, "transfered but not found!");
            retMsg = "unable to verify copy";
           } else {
@@ -764,7 +766,7 @@ void XrdFrmTransfer::ThrowDone(XrdFrmTranChk *cP, time_t endTime)
       } else {
        struct stat Stat;
        strcpy(&xfrP->PFN[xfrP->pfnEnd], ".lock");
-       if (!stat(xfrP->PFN, &Stat))
+       if (stat(xfrP->PFN, &Stat))
           {struct utimbuf tbuff;
            tbuff.actime = tbuff.modtime = endTime;
            if (utime(xfrP->PFN, &tbuff))

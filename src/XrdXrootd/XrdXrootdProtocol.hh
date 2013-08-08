@@ -36,6 +36,7 @@
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysPthread.hh"
 #include "XrdSec/XrdSecInterface.hh"
+#include "XrdSfs/XrdSfsDio.hh"
 
 #include "Xrd/XrdObject.hh"
 #include "Xrd/XrdProtocol.hh"
@@ -65,9 +66,11 @@
 
 class XrdNetSocket;
 class XrdOucErrInfo;
+class XrdOucReqID;
 class XrdOucStream;
 class XrdOucTokenizer;
 class XrdOucTrace;
+class XrdSfsDirectory;
 class XrdSfsFileSystem;
 class XrdSecProtocol;
 class XrdBuffer;
@@ -82,7 +85,7 @@ class XrdXrootdPio;
 class XrdXrootdStats;
 class XrdXrootdXPath;
 
-class XrdXrootdProtocol : public XrdProtocol
+class XrdXrootdProtocol : public XrdProtocol, public XrdSfsDio
 {
 friend class XrdXrootdAdmin;
 friend class XrdXrootdAioReq;
@@ -92,11 +95,21 @@ static int           Configure(char *parms, XrdProtocol_Config *pi);
 
        void          DoIt() {(*this.*Resume)();}
 
+       int           do_WriteSpan();
+
        XrdProtocol  *Match(XrdLink *lp);
 
        int           Process(XrdLink *lp); //  Sync: Job->Link.DoIt->Process
 
+       int           Process2();
+
        void          Recycle(XrdLink *lp, int consec, const char *reason);
+
+       int           SendFile(int fildes);
+
+       int           SendFile(XrdOucSFVec *sfvec, int sfvnum);
+
+       void          SetFD(int fildes);
 
        int           Stats(char *buff, int blen, int do_sync=0);
 
@@ -123,6 +136,7 @@ enum RD_func {RD_chmod = 0, RD_chksum,  RD_dirlist, RD_locate, RD_mkdir,
        int   do_CKsum(const char *Path, const char *Opaque);
        int   do_Close();
        int   do_Dirlist();
+       int   do_DirStat(XrdSfsDirectory *dp, char *pbuff, const char *opaque);
        int   do_Endsess();
        int   do_Getfile();
        int   do_Login();
@@ -173,9 +187,7 @@ static int   Config(const char *fn);
        int   getBuff(const int isRead, int Quantum);
        int   getData(const char *dtype, char *buff, int blen);
 static int   mapMode(int mode);
-       void  MonAuth();
 static void  PidFile();
-       int   Process2();
        void  Reset();
 static int   rpCheck(char *fn, const char **opaque);
        int   rpEmsg(const char *op, char *fn);
@@ -187,6 +199,7 @@ static int   xcksum(XrdOucStream &Config);
 static int   xexp(XrdOucStream &Config);
 static int   xexpdo(char *path, int popt=0);
 static int   xfsl(XrdOucStream &Config);
+static char *xfsL(char *val);
 static int   xpidf(XrdOucStream &Config);
 static int   xprep(XrdOucStream &Config);
 static int   xlog(XrdOucStream &Config);
@@ -200,6 +213,9 @@ static XrdObjectQ<XrdXrootdProtocol> ProtStack;
 XrdObject<XrdXrootdProtocol>         ProtLink;
 
 protected:
+
+       void  MonAuth();
+       int   SetSF(kXR_char *fhandle, bool seton=false);
 
 static XrdXrootdXPath        RPList;    // Redirected paths
 static XrdXrootdXPath        RQList;    // Redirected paths for ENOENT
@@ -231,14 +247,13 @@ static int                 Window;
 static int                 WANPort;
 static int                 WANWindow;
 static char               *SecLib;
-static char               *FSLib;
+static char               *FSLib[2];
 static char               *Notify;
 static char                isRedir;
-static char                chkfsV;
 static char                JobLCL;
-static char                JobQCS;
 static XrdXrootdJob       *JobCKS;
 static char               *JobCKT;
+static XrdOucReqID        *PrepID;
 
 // Static redirection
 //
@@ -264,13 +279,17 @@ static const int           maxRvecsz = 1024;   // Maximum read vector size
 // Statistical area
 //
 static XrdXrootdStats     *SI;
-int                        numReads;     // Count
-int                        numReadP;     // Count
+int                        numReads;     // Count for kXR_read
+int                        numReadP;     // Count for kXR_read pre-preads
+int                        numReadV;     // Count for kR_readv
+int                        numSegsV;     // Count for kR_readv segmens
 int                        numWrites;    // Count
 int                        numFiles;     // Count
 
 int                        cumReads;     // Count less numReads
 int                        cumReadP;     // Count less numReadP
+int                        cumReadV;     // Count less numReadV
+int                        cumSegsV;     // Count less numSegsV
 int                        cumWrites;    // Count less numWrites
 long long                  totReadP;     // Bytes
 
@@ -298,7 +317,10 @@ int                        myBlen;
 int                        myBlast;
 int                       (XrdXrootdProtocol::*Resume)();
 XrdXrootdFile             *myFile;
+union {
 long long                  myOffset;
+int                        myEInfo[2];
+      };
 int                        myIOLen;
 int                        myStalls;
 

@@ -140,11 +140,11 @@ int DumpPhyConn(const char *key,
 {
 
   if (!p) {
-    Info(XrdClientDebug::kUSERDEBUG, "DumpPhyConn", "Phyconn entry, key=NULL");
+    Info(XrdClientDebug::kDUMPDEBUG, "DumpPhyConn", "Phyconn entry, key=NULL");
     return 0;
   }
   
-  Info(XrdClientDebug::kUSERDEBUG, "DumpPhyConn", "Phyconn entry, key='" <<
+  Info(XrdClientDebug::kDUMPDEBUG, "DumpPhyConn", "Phyconn entry, key='" <<
        (key ? key : "***def***") <<
        "', LogCnt=" << p->GetLogConnCnt() << (p->IsValid() ? " Valid" : " NotValid") )
 
@@ -157,8 +157,6 @@ int DestroyPhyConn(const char *key,
 			  XrdClientPhyConnection *p, void *voidcmgr)
 {
   // Function applied to the hash table to destroy all the phyconns
-  XrdClientConnectionMgr *cmgr = (XrdClientConnectionMgr *)voidcmgr;
-  assert(cmgr != 0);
 
   if (p) {
     p->Touch();

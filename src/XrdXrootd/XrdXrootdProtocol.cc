@@ -39,6 +39,7 @@
 #include "XrdXrootd/XrdXrootdFile.hh"
 #include "XrdXrootd/XrdXrootdFileLock.hh"
 #include "XrdXrootd/XrdXrootdFileLock1.hh"
+#include "XrdXrootd/XrdXrootdMonFile.hh"
 #include "XrdXrootd/XrdXrootdMonitor.hh"
 #include "XrdXrootd/XrdXrootdPio.hh"
 #include "XrdXrootd/XrdXrootdProtocol.hh"
@@ -56,7 +57,7 @@ XrdXrootdXPath        XrdXrootdProtocol::RPList;
 XrdXrootdXPath        XrdXrootdProtocol::RQList;
 XrdXrootdXPath        XrdXrootdProtocol::XPList;
 XrdSfsFileSystem     *XrdXrootdProtocol::osFS;
-char                 *XrdXrootdProtocol::FSLib    = 0;
+char                 *XrdXrootdProtocol::FSLib[2] = {0, 0};
 XrdXrootdFileLock    *XrdXrootdProtocol::Locker;
 XrdSecService        *XrdXrootdProtocol::CIA      = 0;
 char                 *XrdXrootdProtocol::SecLib   = 0;
@@ -67,6 +68,7 @@ XrdSysError           XrdXrootdProtocol::eDest(0, "Xrootd");
 XrdXrootdStats       *XrdXrootdProtocol::SI;
 XrdXrootdJob         *XrdXrootdProtocol::JobCKS   = 0;
 char                 *XrdXrootdProtocol::JobCKT   = 0;
+XrdOucReqID          *XrdXrootdProtocol::PrepID   = 0;
 
 char                 *XrdXrootdProtocol::Notify = 0;
 int                   XrdXrootdProtocol::hailWait;
@@ -76,9 +78,7 @@ int                   XrdXrootdProtocol::Window;
 int                   XrdXrootdProtocol::WANPort;
 int                   XrdXrootdProtocol::WANWindow;
 char                  XrdXrootdProtocol::isRedir = 0;
-char                  XrdXrootdProtocol::chkfsV  = 0;
 char                  XrdXrootdProtocol::JobLCL  = 0;
-char                  XrdXrootdProtocol::JobQCS  = 0;
 XrdNetSocket         *XrdXrootdProtocol::AdminSock= 0;
 
 int                   XrdXrootdProtocol::hcMax        = 28657; // const for now
@@ -235,9 +235,9 @@ static  const int hpSZ = hsSZ + prSZ;
 static  struct hs_response
                {kXR_unt16 streamid;
                 kXR_unt16 status;
-                kXR_int32 rlen;
-                kXR_int32 pval;
-                kXR_int32 styp;
+                kXR_unt32 rlen;   // Specified as kXR_int32 in doc!
+                kXR_unt32 pval;   // Specified as kXR_int32 in doc!
+                kXR_unt32 styp;   // Specified as kXR_int32 in doc!
                } hsresp={0, 0, htonl(8), // isRedir == 'M' -> MetaManager
                          htonl(kXR_PROTOCOLVERSION),
                          (isRedir ? htonl(kXR_LBalServer)
@@ -312,6 +312,7 @@ int dlen, rc;
    xp->Response.Set(lp);
    strcpy(xp->Entity.prot, "host");
    xp->Entity.host = (char *)lp->Host();
+   xp->Entity.addrInfo = lp->AddrInfo();
    return (XrdProtocol *)xp;
 }
  
@@ -368,9 +369,9 @@ int XrdXrootdProtocol::Process(XrdLink *lp) // We ignore the argument here
               }
            hcNow = hcPrev; halfBSize = argp->bsize >> 1;
           }
+       argp->buff[Request.header.dlen] = '\0';
        if ((rc = getData("arg", argp->buff, Request.header.dlen)))
           {Resume = &XrdXrootdProtocol::Process2; return rc;}
-       argp->buff[Request.header.dlen] = '\0';
       }
 
 // Continue with request processing at the resume point
@@ -545,6 +546,7 @@ void XrdXrootdProtocol::Recycle(XrdLink *lp, int csec, const char *reason)
 // will call the monitor clear method. So, we won't leak memeory.
 //
    if (Monitor.Logins()) Monitor.Agent->Disc(Monitor.Did, csec, Flags);
+   if (Monitor.Fstat() ) XrdXrootdMonFile::Disc(Monitor.Did);
    Monitor.Clear();
 
 // Set fields to starting point (debugging mostly)
@@ -553,7 +555,7 @@ void XrdXrootdProtocol::Recycle(XrdLink *lp, int csec, const char *reason)
 
 // Push ourselves on the stack
 //
-   ProtStack.Push(&ProtLink);
+   if (Response.isOurs()) ProtStack.Push(&ProtLink);
 }
 
 /******************************************************************************/
@@ -570,6 +572,10 @@ int XrdXrootdProtocol::Stats(char *buff, int blen, int do_sync)
        cumReads += numReads; numReads  = 0;
        SI->prerCnt += numReadP;
        cumReadP += numReadP; numReadP = 0;
+       SI->rvecCnt += numReadV;
+       cumReadV += numReadV; numReadV = 0;
+       SI->rsegCnt += numSegsV;
+       cumSegsV += numSegsV; numSegsV = 0;
        SI->writeCnt += numWrites;
        cumWrites+= numWrites;numWrites = 0;
        SI->statsMutex.UnLock();
@@ -590,7 +596,7 @@ int XrdXrootdProtocol::Stats(char *buff, int blen, int do_sync)
 int XrdXrootdProtocol::CheckSum(XrdOucStream *Stream, char **argv, int argc)
 {
    XrdOucErrInfo myInfo("CheckSum");
-   int rc;
+   int rc, ecode;
 
 // The arguments must have <name> <path> (i.e. argc >= 2)
 //
@@ -605,8 +611,10 @@ int XrdXrootdProtocol::CheckSum(XrdOucStream *Stream, char **argv, int argc)
 
 // Return result regardless of what it is
 //
-   Stream->PutLine(myInfo.getErrText());
-   if (rc) SI->errorCnt++;
+   Stream->PutLine(myInfo.getErrText(ecode));
+   if (rc) {SI->errorCnt++;
+            if (ecode) rc = ecode;
+           }
    return rc;
 }
 
@@ -625,7 +633,10 @@ void XrdXrootdProtocol::Cleanup()
 
 // Delete the FTab if we have it
 //
-   if (FTab) {FTab->Recycle(Monitor.Files() ? Monitor.Agent : 0); FTab = 0;}
+   if (FTab)
+      {FTab->Recycle(Monitor.Files() ? Monitor.Agent : 0, Monitor.Fstat());
+       FTab = 0;
+      }
 
 // Handle parallel stream cleanup. The session stream cannot be closed if
 // there is any queued activity on subordinate streams. A subordinate
@@ -702,12 +713,16 @@ void XrdXrootdProtocol::Reset()
    myIOLen            = 0;
    myStalls           = 0;
    myAioReq           = 0;
+   myFile             = 0;
    numReads           = 0;
    numReadP           = 0;
+   numReadV           = 0;
+   numSegsV           = 0;
    numWrites          = 0;
    numFiles           = 0;
    cumReads           = 0;
-   cumReadP           = 0;
+   cumReadV           = 0;
+   cumSegsV           = 0;
    cumWrites          = 0;
    totReadP           = 0;
    hcPrev             =13;

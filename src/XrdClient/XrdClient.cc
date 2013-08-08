@@ -36,6 +36,7 @@
 
 #include "XrdClient/XrdClient.hh"
 #include "XrdClient/XrdClientDebug.hh"
+#include "XrdClient/XrdClientThread.hh"
 #include "XrdClient/XrdClientUrlSet.hh"
 #include "XrdClient/XrdClientConn.hh"
 #include "XrdClient/XrdClientEnv.hh"
@@ -219,7 +220,6 @@ void XrdClient::TerminateOpenAttempt() {
 
 //_____________________________________________________________________________
 bool XrdClient::Open(kXR_unt16 mode, kXR_unt16 options, bool doitparallel) {
-    short locallogid;
   
     // But we initialize the internal params...
     fOpenPars.opened = FALSE;  
@@ -253,7 +253,6 @@ bool XrdClient::Open(kXR_unt16 mode, kXR_unt16 options, bool doitparallel) {
     // Now start the connection phase, picking randomly from UrlArray
     //
     urlArray.Rewind();
-    locallogid = -1;
     int urlstried = 0;
     for (int connectTry = 0;
 	 (connectTry < connectMaxTry) && (!fConnModule->IsConnected()); 
@@ -286,7 +285,7 @@ bool XrdClient::Open(kXR_unt16 mode, kXR_unt16 options, bool doitparallel) {
 		    Info(XrdClientDebug::kHIDEBUG, "Open", "Trying to connect to " <<
 			 thisUrl->Host << ":" << thisUrl->Port << ". Connect try " <<
 			 connectTry+1);
-		    locallogid = fConnModule->Connect(*thisUrl, this);
+		    fConnModule->Connect(*thisUrl, this);
 		    // To find out if we have tried the whole URLs set
 		    urlstried++;
 		    break;
@@ -1981,6 +1980,15 @@ bool XrdClient::GetCounters( XrdClientCounters *cnt ) {
 }
 
 
+void XrdClient:: RemoveAllDataFromCache()
+{   if (fConnModule) fConnModule->RemoveAllDataFromCache();}
+
+void XrdClient::RemoveDataFromCache(long long begin_offs,
+                                    long long end_offs,
+                                    bool remove_overlapped)
+{      if (fConnModule)
+          fConnModule->RemoveDataFromCache(begin_offs, end_offs, remove_overlapped);
+}
 
 void XrdClient::PrintCounters() {
 

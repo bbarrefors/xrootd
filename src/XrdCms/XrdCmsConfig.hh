@@ -31,7 +31,6 @@
 /******************************************************************************/
 
 #include <stdlib.h>
-#include <sys/socket.h>
 
 #include "Xrd/XrdJob.hh"
 #include "XrdCms/XrdCmsPList.hh"
@@ -116,6 +115,10 @@ int         DiskOK;       // This configuration has data
 int         sched_RR;     // 1 -> Simply do round robin scheduling
 int         doWait;       // 1 -> Wait for a data end-point
 
+int         adsPort;      // Alternate server port
+int         adsMon;       // Alternate server monitoring
+char       *adsProt;      // Alternate server protocol
+
 XrdVersionInfo  *myVInfo; // xrootd version used in compilation
 
 XrdOucName2Name *xeq_N2N; // Server or Manager (non-null if library loaded)
@@ -158,7 +161,6 @@ XrdNetSocket      *AdminSock;
 XrdNetSocket      *AnoteSock;
 XrdNetSocket      *RedirSock;
 XrdNetSecurity    *Police;
-struct sockaddr    myAddr;
 
       XrdCmsConfig() : XrdJob("cmsd startup") {ConfigDefaults();}
      ~XrdCmsConfig() {}
@@ -185,6 +187,7 @@ int  setupXmi(void);
 void Usage(int rc);
 int  xapath(XrdSysError *edest, XrdOucStream &CFile);
 int  xallow(XrdSysError *edest, XrdOucStream &CFile);
+int  xaltds(XrdSysError *edest, XrdOucStream &CFile);
 int  Fsysadd(XrdSysError *edest, int chk, char *fn);
 int  xdelay(XrdSysError *edest, XrdOucStream &CFile);
 int  xdefs(XrdSysError *edest, XrdOucStream &CFile);
@@ -248,6 +251,5 @@ extern XrdCmsXmi    *Xmi_Remove;
 extern XrdCmsXmi    *Xmi_Select;
 extern XrdCmsXmi    *Xmi_Space;
 extern XrdCmsXmi    *Xmi_Stat;
-extern XrdCmsXmi    *Xmi_Pref;
 }
 #endif

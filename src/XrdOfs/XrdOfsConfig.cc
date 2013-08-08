@@ -51,6 +51,8 @@
 #include "XrdOfs/XrdOfsTPC.hh"
 #include "XrdOfs/XrdOfsTrace.hh"
 
+#include "XrdOss/XrdOss.hh"
+
 #include "XrdOuc/XrdOuca2x.hh"
 #include "XrdOuc/XrdOucEnv.hh"
 #include "XrdSys/XrdSysError.hh"
@@ -135,7 +137,7 @@ int XrdOfs::Configure(XrdSysError &Eroute, XrdOucEnv *EnvInfo) {
 // Allocate a checksum configurator at this point
 //
    CksConfig = new XrdCksConfig(ConfigFN, &Eroute, retc,
-                                &XrdVERSIONINFOVAR(XrdOfs));
+                                XrdVERSIONINFOVAR(XrdOfs));
    if (!retc) NoGo = 1;
 
 // If there is no config file, return with the defaults sets.
@@ -188,6 +190,10 @@ int XrdOfs::Configure(XrdSysError &Eroute, XrdOucEnv *EnvInfo) {
        Options &= ~(haveRole);
        Options |= i;
       }
+
+// Export our role if we actually have one
+//
+   if (myRole) XrdOucEnv::Export("XRDROLE", myRole);
 
 // Set the redirect option for other layers
 //
@@ -258,9 +264,9 @@ int XrdOfs::Configure(XrdSysError &Eroute, XrdOucEnv *EnvInfo) {
           fwdTRUNC.Reset();
          }
 
-// Configure checksums if we are not a manager
+// Configure checksums even for managers
 //
-   if (!(Options & isManager) && !NoGo)
+   if (!NoGo)
       NoGo |= (Cks = CksConfig->Configure(0, CksRdsz)) == 0;
    delete CksConfig;
    CksConfig = 0;
@@ -488,8 +494,8 @@ int XrdOfs::ConfigPosc(XrdSysError &Eroute)
   
 int XrdOfs::ConfigRedir(XrdSysError &Eroute, XrdOucEnv *EnvInfo)
 {
-   XrdSysPlugin *myLib;
    XrdCmsClient *(*CmsPI)(XrdSysLogger *, int, int, XrdOss *);
+   CmsPI = 0;
    XrdSysLogger *myLogger = Eroute.logger();
    int isRedir = Options & isManager;
    int RMTopts = (Options & isServer ? XrdCms::IsTarget : 0)
@@ -666,7 +672,6 @@ int XrdOfs::xclib(XrdOucStream &Config, XrdSysError &Eroute)
 int XrdOfs::xcmsl(XrdOucStream &Config, XrdSysError &Eroute)
 {
     char *val, parms[2048];
-    int pl;
 
 // Get the path and parms
 //
@@ -1080,7 +1085,7 @@ int XrdOfs::xolib(XrdOucStream &Config, XrdSysError &Eroute)
 // Record the parameters
 //
    if (OssParms) free(OssParms);
-   OssLib = (*parms ? strdup(parms) : 0);
+   OssParms = (*parms ? strdup(parms) : 0);
    return 0;
 }
 
@@ -1308,7 +1313,7 @@ int XrdOfs::xrole(XrdOucStream &Config, XrdSysError &Eroute)
 int XrdOfs::xtpc(XrdOucStream &Config, XrdSysError &Eroute)
 {
    XrdOfsTPC::iParm Parms;
-   char *vcksum = 0, *val, pgm[1024];
+   char *val, pgm[1024];
    int  reqType;
    *pgm = 0;
 
@@ -1499,7 +1504,6 @@ int XrdOfs::setupAuth(XrdSysError &Eroute)
                           (XrdSysLogger   *lp,    const char   *cfn,
                            const char     *parm,  XrdVersionInfo &vInfo);
 
-   XrdSysPlugin    *myLib;
    XrdAccAuthorize *(*ep)(XrdSysLogger *, const char *, const char *);
 
 // Authorization comes from the library or we use the default

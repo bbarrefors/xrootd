@@ -114,6 +114,9 @@ public:
 
         int            read(XrdSfsAio *aioparm);
 
+        XrdSfsXferSize readv(XrdOucIOVec      *readV,
+                             int               readCount);
+
         XrdSfsXferSize write(XrdSfsFileOffset   fileOffset,
                              const char        *buffer,
                              XrdSfsXferSize     buffer_size);

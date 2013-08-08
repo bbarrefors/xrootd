@@ -65,7 +65,6 @@
 #include "XrdOuc/XrdOucPup.hh"
 #include "XrdOuc/XrdOucTokenizer.hh"
 
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysHeaders.hh"
 #include "XrdSys/XrdSysTimer.hh"
@@ -165,7 +164,6 @@ int XrdgetProtocolPort(const char *pname, char *parms,
    Config.myProg    = strdup(pi->myProg);
    Sched            = pi->Sched;
    if (pi->DebugON) Trace.What = TRACE_ALL;
-   memcpy(&Config.myAddr, pi->myAddr, sizeof(struct sockaddr));
 
 // The only parameter we accept is the name of an alternate config file
 //
@@ -351,8 +349,8 @@ void XrdCmsProtocol::Pander(const char *manager, int mport)
       // Compute current login mode
       //
       Mode = Role
-           | (CmsState.Suspended ? CmsLoginData::kYR_suspend : 0)
-           | (CmsState.NoStaging ? CmsLoginData::kYR_nostage : 0);
+           | (CmsState.Suspended ? int(CmsLoginData::kYR_suspend) : 0)
+           | (CmsState.NoStaging ? int(CmsLoginData::kYR_nostage) : 0);
        if (fails >= 6 && manp == manager) 
           {fails = 0; Mode |=    CmsLoginData::kYR_trying;}
 
@@ -372,6 +370,13 @@ void XrdCmsProtocol::Pander(const char *manager, int mport)
                   }
           }
 
+       // Check if we should process the redirection
+       //
+       if (rc == kYR_redirect)
+          {myMans.Add(Link->NetAddr(),(char *)Data.Paths,Config.PortTCP,Lvl+1);
+           free(Data.Paths);
+          }
+
        // Remove manager from the config
        //
        Manager.Remove(myNode, (rc == kYR_redirect ? "redirected"
@@ -379,21 +384,6 @@ void XrdCmsProtocol::Pander(const char *manager, int mport)
        ManTree.Disc(myNID);
        Link->Close();
        delete myNode; myNode = 0;
-
-       // Check if we should process the redirection
-       //
-       if (rc == kYR_redirect)
-          {struct sockaddr netaddr;
-           XrdOucTokenizer hList((char *)Data.Paths);
-           unsigned int ipaddr;
-           char *hP;
-           Link->Name(&netaddr);
-           ipaddr = XrdSysDNS::IPAddr(&netaddr);
-           myMans.Del(ipaddr);
-           while((hP = hList.GetToken()))
-                 myMans.Add(ipaddr, hP, Config.PortTCP, Lvl+1);
-           free(Data.Paths);
-          }
 
        // Cycle on to the next manager if we have one or snooze and try over
        //
@@ -804,7 +794,7 @@ const char *XrdCmsProtocol::Dispatch(Bearing cDir, int maxWait, int maxTries)
 
 // Dispatch runs with the current thread bound to the link.
 //
-   Link->Bind(XrdSysThread::ID());
+// Link->Bind(XrdSysThread::ID());
 
 // Read in the request header
 //
@@ -914,7 +904,7 @@ void XrdCmsProtocol::Reissue(XrdCmsRRData &Data)
    XrdCmsPInfo pinfo;
    SMask_t amask;
    struct iovec ioB[2] = {{(char *)&Data.Request, sizeof(Data.Request)},
-                          {         Data.Buff,    Data.Dlen}
+                          {         Data.Buff,    (size_t)Data.Dlen}
                          };
 
 // Check if we can really reissue the command
@@ -981,7 +971,7 @@ void XrdCmsProtocol::Reply_Error(XrdCmsRRData &Data, int ecode, const char *etex
                               htons(sizeof(kXR_unt32)+n)},
                              htonl(static_cast<unsigned int>(ecode))};
          struct iovec ioV[2] = {{(char *)&Resp, sizeof(Resp)},
-                                {(char *)etext, n}};
+                                {(char *)etext, (size_t)n}};
          act = " sent";
          Link->Send(ioV, 2);
         } else act = " skip";

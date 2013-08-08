@@ -12,6 +12,21 @@ add_definitions( -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=6
 set( LIBRARY_PATH_PREFIX "lib" )
 
 #-------------------------------------------------------------------------------
+# GCC
+#-------------------------------------------------------------------------------
+if( CMAKE_COMPILER_IS_GNUCXX )
+  set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror" )
+  set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-parameter" )
+  # gcc 4.1 is retarded
+  execute_process( COMMAND ${CMAKE_C_COMPILER} -dumpversion
+                   OUTPUT_VARIABLE GCC_VERSION )
+  if( (GCC_VERSION VERSION_GREATER 4.1 OR GCC_VERSION VERSION_EQUAL 4.1)
+      AND GCC_VERSION VERSION_LESS 4.2 )
+    set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-strict-aliasing" )
+  endif()
+endif()
+
+#-------------------------------------------------------------------------------
 # Linux
 #-------------------------------------------------------------------------------
 if( ${CMAKE_SYSTEM_NAME} STREQUAL "Linux" )
@@ -26,6 +41,13 @@ endif()
 #-------------------------------------------------------------------------------
 if( APPLE )
   set( MacOSX TRUE )
+
+  # this is here because of deprecated stuff in openssl
+  if( CMAKE_COMPILER_IS_GNUCXX )
+    set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations" )
+  endif()
+
+
   add_definitions( -D__macos__=1 )
   add_definitions( -DLT_MODULE_EXT=".dylib" )
   set( CMAKE_INSTALL_LIBDIR "lib" )

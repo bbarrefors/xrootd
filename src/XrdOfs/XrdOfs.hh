@@ -35,15 +35,14 @@
   
 #include "XrdOfs/XrdOfsEvr.hh"
 #include "XrdOfs/XrdOfsHandle.hh"
-#include "XrdOss/XrdOss.hh"
 #include "XrdSys/XrdSysPthread.hh"
-#include "XrdOuc/XrdOucPList.hh"
 #include "XrdSfs/XrdSfsInterface.hh"
 #include "XrdCms/XrdCmsClient.hh"
 
 class XrdOfsEvs;
 class XrdOfsPocq;
 class XrdOss;
+class XrdOssDF;
 class XrdOssDir;
 class XrdOucEnv;
 class XrdSysError;
@@ -72,6 +71,8 @@ public:
 inline  void        copyError(XrdOucErrInfo &einfo) {einfo = error;}
 
 const   char       *FName() {return (const char *)fname;}
+
+        int         autoStat(struct stat *buf);
 
                     XrdOfsDirectory(const char *user, int MonID)
                           : XrdSfsDirectory(user, MonID)
@@ -123,6 +124,9 @@ virtual int            fctl(const int               cmd,
         XrdSfsXferSize read(XrdSfsFileOffset   fileOffset,
                             char              *buffer,
                             XrdSfsXferSize     buffer_size);
+
+        XrdSfsXferSize readv(XrdOucIOVec      *readV,
+                             int               readCount);
 
         int            read(XrdSfsAio *aioparm);
 

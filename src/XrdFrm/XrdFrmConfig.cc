@@ -35,7 +35,6 @@
 #include <fcntl.h>
 #include <sys/param.h>
 #include <sys/types.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 
 #include "XrdVersion.hh"
@@ -48,6 +47,7 @@
 #include "XrdFrm/XrdFrmCns.hh"
 #include "XrdFrm/XrdFrmConfig.hh"
 #include "XrdFrm/XrdFrmMonitor.hh"
+#include "XrdNet/XrdNetAddr.hh"
 #include "XrdNet/XrdNetCmsNotify.hh"
 #include "XrdOss/XrdOss.hh"
 #include "XrdOss/XrdOssSpace.hh"
@@ -57,12 +57,12 @@
 #include "XrdOuc/XrdOucMsubs.hh"
 #include "XrdOuc/XrdOucN2NLoader.hh"
 #include "XrdOuc/XrdOucProg.hh"
+#include "XrdOuc/XrdOucSiteName.hh"
 #include "XrdOuc/XrdOucStream.hh"
 #include "XrdOuc/XrdOucPList.hh"
 #include "XrdOuc/XrdOucTList.hh"
 #include "XrdOuc/XrdOucTokenizer.hh"
 #include "XrdOuc/XrdOucUtils.hh"
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysHeaders.hh"
 #include "XrdSys/XrdSysLogger.hh"
@@ -154,6 +154,7 @@ XrdFrmConfig::XrdFrmConfig(SubSys ss, const char *vopts, const char *uinfo)
 // Preset all variables with common defaults
 //
    myVersion= &myVer;
+   mySite   = 0;
    vOpts    = vopts;
    uInfo    = uinfo;
    ssID     = ss;
@@ -191,6 +192,7 @@ XrdFrmConfig::XrdFrmConfig(SubSys ss, const char *vopts, const char *uinfo)
    runOld   = 0;
    runNew   = 1;
    nonXA    = 0;
+   doStatPF = 0;
 
    myUid    = geteuid();
    myGid    = getegid();
@@ -245,6 +247,7 @@ int XrdFrmConfig::Configure(int argc, char **argv, int (*ppf)())
    extern XrdOss *XrdOssGetSS(XrdSysLogger *, const char *, const char *,
                               const char   *, XrdVersionInfo &);
    extern int *XrdOssRunMode;
+   static XrdNetAddr myAddr(0);
    XrdFrmConfigSE theSE;
    int n, retc, isMum = 0, myXfrMax = -1, NoGo = 0, optBG = 0;
    const char *temp;
@@ -308,6 +311,8 @@ int XrdFrmConfig::Configure(int argc, char **argv, int (*ppf)())
                  break;
        case 's': pidFN = optarg;
                  break;
+       case 'S': mySite= optarg;
+                 break;
        default:  sprintf(buff,"'%c'", optopt);
                  if (c == ':') Say.Emsg("Config", buff, "value not specified.");
                     else Say.Emsg("Config", buff, "option is invalid");
@@ -315,6 +320,10 @@ int XrdFrmConfig::Configure(int argc, char **argv, int (*ppf)())
        }
      nextArg = optind;
      }
+
+// Set the site name if we have it at this point
+//
+   if (mySite) mySite = XrdOucSiteName::Set(mySite);
 
 // If we are an agent without a logfile and one is actually defined for the
 // underlying system, use the directory of the underlying system.
@@ -351,7 +360,7 @@ int XrdFrmConfig::Configure(int argc, char **argv, int (*ppf)())
 
 // Get the full host name. In theory, we should always get some kind of name.
 //
-   if (!(myName = XrdSysDNS::getHostName()))
+   if (!(myName = myAddr.Name()))
       {Say.Emsg("Config","Unable to determine host name; execution terminated.");
        _exit(16);
       }
@@ -398,7 +407,10 @@ int XrdFrmConfig::Configure(int argc, char **argv, int (*ppf)())
        if (!NoGo)
           {if (!(ossFS=XrdOssGetSS(Say.logger(), ConfigFN, ossLib, ossParms,
                                    *myVersion))) NoGo = 1;
-              else runNew = !(runOld = XrdOssRunMode ? *XrdOssRunMode : 0);
+              else {struct stat Stat;
+                    doStatPF = ossFS->StatPF("/", &Stat) != -ENOTSUP;
+                    runNew = !(runOld = XrdOssRunMode ? *XrdOssRunMode : 0);
+                   }
           }
       }
 
@@ -576,6 +588,16 @@ XrdOucTList *XrdFrmConfig::Space(const char *Name, const char *Path)
 }
 
 /******************************************************************************/
+/*                                  S t a t                                   */
+/******************************************************************************/
+  
+int XrdFrmConfig::Stat(const char *xLfn, const char *xPfn, struct stat *buff)
+{
+   return (doStatPF ? ossFS->StatPF(xPfn, buff)
+                    : ossFS->Stat  (xLfn, buff, XRDOSS_resonly));
+}
+
+/******************************************************************************/
 /*                     P r i v a t e   F u n c t i o n s                      */
 /******************************************************************************/
 /******************************************************************************/
@@ -726,6 +748,13 @@ int XrdFrmConfig::ConfigMP(const char *pType)
 // Delete the explist
 //
    while((tP = expList)) {expList = tP->next; delete tP;}
+
+// For purging, make sure we have at least one path to purge
+//
+   if (xOpt == XRDEXP_PURGE && !pathList)
+      {Say.Emsg("Config","No purgeable paths specified!");
+       NoGo = 1;
+      }
 
 // The oss would have already set NORCREATE and NOCHECK for all stageable paths.
 // But now, we must also off the R/O flag on every purgeable and stageable path
@@ -955,7 +984,7 @@ int XrdFrmConfig::ConfigProc()
 // Allocate a chksum configurator if needed
 //
    if (ssID == ssAdmin)
-      {CksCfg = new XrdCksConfig(ConfigFN, &Say, retc, myVersion);
+      {CksCfg = new XrdCksConfig(ConfigFN, &Say, retc, *myVersion);
        if (!retc) return 1;
       }
 
@@ -1025,6 +1054,7 @@ int XrdFrmConfig::ConfigXeq(char *var, int mbok)
        if (!strcmp(var, "qcheck"        )) return xqchk();
        if (isAgent) return 0;           // Server-oriented directives
 
+       if (!strcmp(var, "all.sitename"  )) return xsit();
        if (!strcmp(var, "ofs.osslib"    )) return Grab(var, &ossLib,    0);
        if (!strcmp(var, "oss.cache"     )) return xspace(0,0);
        if (!strcmp(var, "oss.localroot" )) return Grab(var, &LocalRoot, 0);
@@ -1046,6 +1076,7 @@ int XrdFrmConfig::ConfigXeq(char *var, int mbok)
 
    if (ssID == ssPurg)
       {
+       if (!strcmp(var, "all.sitename"  )) return xsit();
        if (!strcmp(var, "dirhold"       )) return xdpol();
        if (!strcmp(var, "oss.cache"     )) return xspace(1,0);
        if (!strcmp(var, "oss.localroot" )) return Grab(var, &LocalRoot, 0);
@@ -1189,7 +1220,7 @@ int XrdFrmConfig::Grab(const char *var, char **Dest, int nosubs)
 XrdOucTList *XrdFrmConfig::InsertPL(XrdOucTList *pL, const char *Path,
                                     int Plen, int isRW)
 {
-   short sval[4] = {isRW, Plen};
+   short sval[4] = {static_cast<short>(isRW), static_cast<short>(Plen)};
    XrdOucTList *pP = 0, *tP = pL;
 
 // Find insertion point
@@ -1389,11 +1420,13 @@ int XrdFrmConfig::xcnsd()
 
    Purpose:  To parse the directive: copycmd [Options] cmd [args]
 
-   Options:  [in] [out] [stats] [timeout <sec>] [url] [xpd] cmd [args]
+   Options:  [in] [noalloc] [out] [rmerr] [stats] [timeout <sec>] [url] [xpd]
 
              in        use command for incomming copies.
              noalloc   do not pre-allocate space for incomming copies.
              out       use command for outgoing copies.
+             rmerr     remove incomming file when copy ends with an error.
+                       Default unless noalloc is specified.
              stats     print transfer statistics in the log.
              timeout   how long the cmd can run before it is killed.
              url       use command for url-based transfers.
@@ -1402,7 +1435,7 @@ int XrdFrmConfig::xcnsd()
    Output: 0 upon success or !0 upon failure.
 */
 int XrdFrmConfig::xcopy()
-{  int cmdIO[2] = {0,0}, TLim=0, Stats=0, hasMDP=0, cmdUrl=0, noAlo=0;
+{  int cmdIO[2] = {0,0}, TLim=0, Stats=0, hasMDP=0, cmdUrl=0, noAlo=0, rmErr=0;
    int monPD = 0;
    char *val, *theCmd = 0;
    struct copyopts {const char *opname; int *oploc;} cpopts[] =
@@ -1410,6 +1443,7 @@ int XrdFrmConfig::xcopy()
           {"in",     &cmdIO[0]},
           {"out",    &cmdIO[1]},
           {"noalloc",&noAlo},
+          {"rmerr",  &rmErr},
           {"stats",  &Stats},
           {"timeout",&TLim},
           {"url",    &cmdUrl},
@@ -1453,6 +1487,7 @@ int XrdFrmConfig::xcopy()
            if (Stats)  xfrCmd[n].Opts  |= cmdStats;
            if (monPD)  xfrCmd[n].Opts  |= cmdXPD;
            if (hasMDP) xfrCmd[n].Opts  |= cmdMDP;
+           if (rmErr)  xfrCmd[n].Opts  |= cmdRME;
            if (noAlo)  xfrCmd[n].Opts  &=~cmdAlloc;
               else     xfrCmd[n].Opts  |= cmdAlloc;
            xfrCmd[n].TLimit = TLim;
@@ -1960,6 +1995,34 @@ int XrdFrmConfig::xqchk()
    if (QPath) free(QPath);
    QPath = strdup(val);
    return 0;
+}
+
+/******************************************************************************/
+/*                                  x s i t                                   */
+/******************************************************************************/
+
+/* Function: xsit
+
+   Purpose:  To parse directive: sitename <name>
+
+             <name>   is the 1- to 15-character site name to be included in
+                      monitoring information. This can also come from the
+                      command line -N option. The first such name is used.
+
+   Output: 0 upon success or 1 upon failure.
+*/
+
+int XrdFrmConfig::xsit()
+{
+    char *val;
+
+    if (!(val = cFile->GetWord()))
+       {Say.Emsg("Config", "sitename value not specified"); return 1;}
+
+    if (mySite) Say.Emsg("Config", "sitename already specified, using '",
+                         mySite, "'.");
+       else mySite = XrdOucSiteName::Set(val);
+    return 0;
 }
 
 /******************************************************************************/

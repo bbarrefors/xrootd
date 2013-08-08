@@ -40,6 +40,7 @@
 #include "XrdClient/XrdClientConst.hh"
 #include "XrdClient/XrdClientEnv.hh"
 
+#include "XrdNet/XrdNetAddr.hh"
 #include "XrdNet/XrdNetOpts.hh"
 #include "XrdNet/XrdNetSocket.hh"
 
@@ -51,7 +52,6 @@
 #include "XrdOuc/XrdOucTokenizer.hh"
 #include "XrdOuc/XrdOucUtils.hh"
 
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysHeaders.hh"
 #include "XrdSys/XrdSysLogger.hh"
@@ -129,7 +129,9 @@ int XrdCnsConfig::Configure(int argc, char **argv, char *argt)
    const char *TraceID = "Config";
    XrdOucArgs Spec(&MLog,(argt ? "Cns_Config: ":"XrdCnsd: "),
                           "a:b:B:c:dD:e:i:I:k:l:L:N:p:q:R:");
-   char buff[2048], *dP, *tP, *dnsEtxt = 0, *n2n = 0, *lroot = 0, *xpl = 0;
+   XrdNetAddr netHost;
+   const char *dnsEtxt = 0;
+   char buff[2048], *dP, *tP, *n2n = 0, *lroot = 0, *xpl = 0;
    char theOpt, *theArg;
    long long llval;
    int n, bPort = 0, haveArk = 0, NoGo = 0;
@@ -240,10 +242,11 @@ int XrdCnsConfig::Configure(int argc, char **argv, char *argt)
              if ((cP = index(hBuff+1, ':'))
              &&  XrdOuca2x::a2i(MLog,"-b port",cP+1,&bPort,1,65535)) *buff = 0;
              if (cP) *cP = '\0';
-             bHost = XrdSysDNS::getHostName(hBuff+1, &dnsEtxt);
+             if (!(dnsEtxt = netHost.Set(hBuff+1,0)))
+                bHost = strdup(netHost.Name("0.0.0.0", &dnsEtxt));
              if (dnsEtxt)
-                {*hBuff = '\''; strcat(hBuff+1, "\'"); *buff = 0;
-                 MLog.Emsg("Config", hBuff, dnsEtxt);
+                {*buff = 0;
+                 MLog.Emsg("Config", "Unable to resolve", hBuff+1, dnsEtxt);
                 } else strcpy(buff, dP);
             }
        if (!*buff)
@@ -279,11 +282,12 @@ int XrdCnsConfig::Configure(int argc, char **argv, char *argt)
                      NoGo = 1; continue;
                     } else *tP = '\0';
          dnsEtxt = 0;
-         tP = XrdSysDNS::getHostName(dP, &dnsEtxt);
+         if (!(dnsEtxt = netHost.Set(dP,0)))
+            tP = strdup(netHost.Name(0,&dnsEtxt));
          if (dnsEtxt)
-            {buff[0] = '\''; buff[1] = ' '; strcpy(buff+2, dnsEtxt);
-             MLog.Emsg("Config", "'", dP, buff);
-             NoGo = 1; delete tP; continue;
+            {buff[0] = '-'; buff[1] = ' '; strcpy(buff+2, dnsEtxt);
+             MLog.Emsg("Config", "Unable to resolve host", dP, buff);
+             NoGo = 1; continue;
             }
          sprintf(buff, "%s:%d", tP, n); delete tP;
               if (!bDest)  Dest = new XrdOucTList(buff, (bPath ? -n : n), Dest);
@@ -321,7 +325,7 @@ int XrdCnsConfig::Configure()
    XrdOucTokenizer mToks(0);
    XrdNetSocket   *EventSock;
    pthread_t tid;
-   int n, retc, NoGo = 0;
+   int retc, NoGo = 0;
    const char *iP;
    char buff[2048], *dP, *tP, *eVar;
 
@@ -381,7 +385,6 @@ int XrdCnsConfig::Configure()
 //
    if ((eVar = getenv("XRDEXPORTS")) && *eVar)
       {eVar = strdup(eVar); mToks.Attach(eVar); mToks.GetLine();
-       n = 9999;
        while((dP = mToks.GetToken()))
             {if (!LocalPath(dP, buff, sizeof(buff))) NoGo = 1;
                 else {Exports =  new XrdOucTList(buff, strlen(buff), Exports);
@@ -465,8 +468,6 @@ int XrdCnsConfig::Configure()
 int XrdCnsConfig::ConfigN2N()
 {
    static XrdVERSIONINFODEF(myVer, XrdCns, XrdVNUMBER, XrdVERSION);
-   XrdSysPlugin    *myLib;
-   XrdOucName2Name *(*ep)(XrdOucgetName2NameArgs);
    char *N2NLib, *N2NParms = 0;
 
 // Get local root

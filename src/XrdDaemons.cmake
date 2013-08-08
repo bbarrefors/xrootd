@@ -8,14 +8,18 @@ add_executable(
   xrootd
   XrdXrootd/XrdXrootdAdmin.cc           XrdXrootd/XrdXrootdAdmin.hh
   XrdXrootd/XrdXrootdAio.cc             XrdXrootd/XrdXrootdAio.hh
+  XrdXrootd/XrdXrootdBridge.cc          XrdXrootd/XrdXrootdBridge.hh
   XrdXrootd/XrdXrootdCallBack.cc        XrdXrootd/XrdXrootdCallBack.hh
   XrdXrootd/XrdXrootdConfig.cc
   XrdXrootd/XrdXrootdFile.cc            XrdXrootd/XrdXrootdFile.hh
                                         XrdXrootd/XrdXrootdFileLock.hh
   XrdXrootd/XrdXrootdFileLock1.cc       XrdXrootd/XrdXrootdFileLock1.hh
+                                        XrdXrootd/XrdXrootdFileStats.hh
   XrdXrootd/XrdXrootdJob.cc             XrdXrootd/XrdXrootdJob.hh
   XrdXrootd/XrdXrootdLoadLib.cc
                                         XrdXrootd/XrdXrootdMonData.hh
+  XrdXrootd/XrdXrootdMonFile.cc         XrdXrootd/XrdXrootdMonFile.hh
+  XrdXrootd/XrdXrootdMonFMap.cc         XrdXrootd/XrdXrootdMonFMap.hh
   XrdXrootd/XrdXrootdMonitor.cc         XrdXrootd/XrdXrootdMonitor.hh
 
   XrdXrootd/XrdXrootdPio.cc             XrdXrootd/XrdXrootdPio.hh
@@ -24,6 +28,9 @@ add_executable(
   XrdXrootd/XrdXrootdResponse.cc        XrdXrootd/XrdXrootdResponse.hh
                                         XrdXrootd/XrdXrootdStat.icc
   XrdXrootd/XrdXrootdStats.cc           XrdXrootd/XrdXrootdStats.hh
+  XrdXrootd/XrdXrootdTransit.cc         XrdXrootd/XrdXrootdTransit.hh
+  XrdXrootd/XrdXrootdTransPend.cc       XrdXrootd/XrdXrootdTransPend.hh
+  XrdXrootd/XrdXrootdTransSend.cc       XrdXrootd/XrdXrootdTransSend.hh
   XrdXrootd/XrdXrootdXeq.cc
   XrdXrootd/XrdXrootdXeqAio.cc
                                         XrdXrootd/XrdXrootdTrace.hh
@@ -59,6 +66,8 @@ add_executable(
   XrdCms/XrdCmsNash.cc            XrdCms/XrdCmsNash.hh
   XrdCms/XrdCmsNode.cc            XrdCms/XrdCmsNode.hh
   XrdCms/XrdCmsPList.cc           XrdCms/XrdCmsPList.hh
+  XrdCms/XrdCmsPref.cc	  	  XrdCms/XrdCmsPref.hh
+  XrdCms/XrdCmsPrefNodes.cc	  XrdCms/XrdCmsPrefNodes.hh
   XrdCms/XrdCmsPrepare.cc         XrdCms/XrdCmsPrepare.hh
   XrdCms/XrdCmsPrepArgs.cc        XrdCms/XrdCmsPrepArgs.hh
   XrdCms/XrdCmsProtocol.cc        XrdCms/XrdCmsProtocol.hh
@@ -67,8 +76,6 @@ add_executable(
                                   XrdCms/XrdCmsSelect.hh
   XrdCms/XrdCmsState.cc           XrdCms/XrdCmsState.hh
   XrdCms/XrdCmsSupervisor.cc      XrdCms/XrdCmsSupervisor.hh
-  XrdCms/XrdCmsPrefNodes.cc       XrdCms/XrdCmsPrefNodes.hh
-  XrdCms/XrdCmsPref.cc            XrdCms/XrdCmsPref.hh
                                   XrdCms/XrdCmsTrace.hh )
 target_link_libraries(
   cmsd
@@ -76,7 +83,8 @@ target_link_libraries(
   XrdMain
   XrdUtils
   pthread
-  ${EXTRA_LIBS} )
+  ${EXTRA_LIBS}
+  ${SOCKET_LIBRARY} )
 
 #-------------------------------------------------------------------------------
 # Install

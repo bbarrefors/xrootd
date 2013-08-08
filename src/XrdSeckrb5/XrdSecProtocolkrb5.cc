@@ -53,7 +53,8 @@ extern "C" {
 
 #include "XrdVersion.hh"
 
-#include "XrdSys/XrdSysDNS.hh"
+#include "XrdNet/XrdNetAddrInfo.hh"
+#include "XrdNet/XrdNetUtils.hh"
 #include "XrdOuc/XrdOucErrInfo.hh"
 #include "XrdSys/XrdSysHeaders.hh"
 #include "XrdSys/XrdSysPthread.hh"
@@ -117,11 +118,12 @@ static  void               setExpFile(char *expfile)
 
         XrdSecProtocolkrb5(const char                *KP,
                            const char                *hname,
-                           const struct sockaddr     *ipadd)
+                                 XrdNetAddrInfo      &endPoint)
                           : XrdSecProtocol(XrdSecPROTOIDENT)
                           {Service = (KP ? strdup(KP) : 0);
                            Entity.host = strdup(hname);
-                           memcpy(&hostaddr, ipadd, sizeof(hostaddr));
+                           epAddr = endPoint;
+                           Entity.addrInfo = &epAddr;
                            CName[0] = '?'; CName[1] = '\0';
                            Entity.name = CName;
                            Step = 0;
@@ -139,6 +141,7 @@ private:
 
 static int Fatal(XrdOucErrInfo *erp,int rc,const char *msg1,char *KP=0,int krc=0);
 static int get_krbCreds(char *KP, krb5_creds **krb_creds);
+       void SetAddr(krb5_address &ipadd);
 
 static XrdSysMutex        krbContext;    // Server
 static XrdSysMutex        krbClientContext;// Client
@@ -161,7 +164,7 @@ static char               ExpFile[XrdSecMAXPATHLEN]; // Server: (template for)
 int exp_krbTkn(XrdSecCredentials *cred, XrdOucErrInfo *erp);
 int get_krbFwdCreds(char *KP, krb5_data *outdata);
 
-struct sockaddr           hostaddr;      // Client-side only
+XrdNetAddrInfo            epAddr;
 char                      CName[256];    // Kerberos limit
 char                     *Service;       // Target principal for client
 char                      Step;          // Indicates at which step we are
@@ -472,11 +475,7 @@ int XrdSecProtocolkrb5::Authenticate(XrdSecCredentials *cred,
 //
    CLDBG("Context Locked");
    if (!(XrdSecProtocolkrb5::options & XrdSecNOIPCHK))
-      {struct sockaddr_in *ip = (struct sockaddr_in *)&hostaddr;
-      // The above is a hack but K5 does it this way
-       ipadd.addrtype = ADDRTYPE_INET;
-       ipadd.length = sizeof(ip->sin_addr);
-       ipadd.contents = (krb5_octet *)&ip->sin_addr;
+      {SetAddr(ipadd);
        iferror = (char *)"Unable to validate ip address;";
        if (!(rc=krb5_auth_con_init(krb_context, &AuthContext)))
              rc=krb5_auth_con_setaddrs(krb_context, AuthContext, NULL, &ipadd);
@@ -589,15 +588,15 @@ int XrdSecProtocolkrb5::Init(XrdOucErrInfo *erp, char *KP, char *kfn)
 // Find out if need to acquire privileges to open and read the keytab file and
 // set the required uid,gid accordingly
 //
-   krb_kt_uid = 0;
-   krb_kt_gid = 0;
+   krb_kt_uid = geteuid();
+   krb_kt_gid = getegid();
    char *pf = 0;
    if ((pf = (char *) strstr(krb_kt_name, "FILE:")))
       {pf += strlen("FILE:");
        if (strlen(pf) > 0)
           {struct stat st;
            if (!stat(pf, &st))
-              {if (st.st_uid != geteuid() || st.st_gid != getegid())
+              {if (st.st_uid != krb_kt_uid || st.st_gid != krb_kt_gid)
                   {krb_kt_uid = st.st_uid;
                    krb_kt_gid = st.st_gid;
                   }
@@ -752,7 +751,8 @@ int XrdSecProtocolkrb5::get_krbFwdCreds(char *KP, krb5_data *outdata)
 
 int XrdSecProtocolkrb5::exp_krbTkn(XrdSecCredentials *cred, XrdOucErrInfo *erp)
 {
-    int rc = 0;
+   krb5_address      ipadd;
+   int rc = 0;
 
 // Create the cache filename, expanding the keywords, if needed
 //
@@ -814,7 +814,8 @@ int XrdSecProtocolkrb5::exp_krbTkn(XrdSecCredentials *cred, XrdOucErrInfo *erp)
 
 // Fill-in remote address
 //
-    if ((rc = krb5_auth_con_setaddrs(krb_context, AuthContext, 0, (krb5_address *)&hostaddr)))
+    SetAddr(ipadd);
+    if ((rc = krb5_auth_con_setaddrs(krb_context, AuthContext, 0, &ipadd)))
        return rc;
 
 // Readout the credentials
@@ -862,6 +863,27 @@ int XrdSecProtocolkrb5::exp_krbTkn(XrdSecCredentials *cred, XrdOucErrInfo *erp)
    return 0;
 }
  
+/******************************************************************************/
+/*                               S e t A d d r                                */
+/******************************************************************************/
+  
+void XrdSecProtocolkrb5::SetAddr(krb5_address &ipadd)
+{
+// The below is a hack but that's how it is actually done!
+//
+   if (epAddr.Family() == AF_INET6)
+      {struct sockaddr_in6 *ip = (struct sockaddr_in6 *)epAddr.SockAddr();
+       ipadd.addrtype = ADDRTYPE_INET6;
+       ipadd.length = sizeof(ip->sin6_addr);
+       ipadd.contents = (krb5_octet *)&ip->sin6_addr;
+      } else {
+       struct sockaddr_in *ip = (struct sockaddr_in *)epAddr.SockAddr();
+       ipadd.addrtype = ADDRTYPE_INET;
+       ipadd.length = sizeof(ip->sin_addr);
+       ipadd.contents = (krb5_octet *)&ip->sin_addr;
+      }
+}
+
 /******************************************************************************/
 /*                X r d S e c p r o t o c o l k r b 5 I n i t                 */
 /******************************************************************************/
@@ -940,7 +962,7 @@ char  *XrdSecProtocolkrb5Init(const char     mode,
     int lkey = strlen("<host>");
     char *phost = (char *) strstr(&KPrincipal[0], "<host>");
     if (phost)
-       {char *hn = XrdSysDNS::getHostName();
+       {char *hn = XrdNetUtils::MyHostName();
         if (hn)
            {int lhn = strlen(hn);
             if (lhn != lkey) {
@@ -999,7 +1021,7 @@ extern "C"
 {
 XrdSecProtocol *XrdSecProtocolkrb5Object(const char              mode,
                                          const char             *hostname,
-                                         const struct sockaddr  &netaddr,
+                                               XrdNetAddrInfo   &endPoint,
                                          const char             *parms,
                                                XrdOucErrInfo    *erp)
 {
@@ -1022,7 +1044,7 @@ XrdSecProtocol *XrdSecProtocolkrb5Object(const char              mode,
 
 // Get a new protocol object
 //
-   if (!(prot = new XrdSecProtocolkrb5(KPrincipal, hostname, &netaddr)))
+   if (!(prot = new XrdSecProtocolkrb5(KPrincipal, hostname, endPoint)))
       {char *msg = (char *)"Seckrb5: Insufficient memory for protocol.";
        if (erp) erp->setErrInfo(ENOMEM, msg);
           else cerr <<msg <<endl;

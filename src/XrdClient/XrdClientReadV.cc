@@ -31,9 +31,12 @@
 //                                                                      //
 //////////////////////////////////////////////////////////////////////////
 
+#include "XrdClient/XrdClientProtocol.hh"
 #include "XrdClient/XrdClientReadV.hh"
 #include "XrdClient/XrdClientConn.hh"
 #include "XrdClient/XrdClientDebug.hh"
+
+#include "XrdSys/XrdSysPlatform.hh"
 
 #include <memory.h>
 
@@ -146,6 +149,10 @@ kXR_int32 XrdClientReadV::UnpackReadVResp(char *destbuf, char *respdata, kXR_int
               break;
            }
            cur_buf_len += header.rlen;
+           if (cur_buf_len > buflis[cur_buf].rlen) {
+              res = -1;
+              break;
+           }
            if (cur_buf_len == buflis[cur_buf].rlen) {
               cur_buf++;
               cur_buf_len = 0;

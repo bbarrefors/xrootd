@@ -32,9 +32,10 @@
 /*                                                                            */
 /* ************************************************************************** */
 
-#include <XrdSut/XrdSutRndm.hh>
-#include <XrdCrypto/XrdCryptosslTrace.hh>
-#include <XrdCrypto/XrdCryptosslRSA.hh>
+#include "XrdSut/XrdSutRndm.hh"
+#include "XrdCrypto/XrdCryptosslAux.hh"
+#include "XrdCrypto/XrdCryptosslTrace.hh"
+#include "XrdCrypto/XrdCryptosslRSA.hh"
 
 #include <string.h>
 
@@ -139,7 +140,7 @@ XrdCryptosslRSA::XrdCryptosslRSA(EVP_PKEY *key, bool check)
 
 
 //____________________________________________________________________________
-XrdCryptosslRSA::XrdCryptosslRSA(const XrdCryptosslRSA &r)
+XrdCryptosslRSA::XrdCryptosslRSA(const XrdCryptosslRSA &r) : XrdCryptoRSA()
 {
    // Copy Constructor
    EPNAME("RSA::XrdCryptosslRSA_copy");

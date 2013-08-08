@@ -22,6 +22,7 @@ add_library(
   XrdSec/XrdSecClient.cc
                                       XrdSec/XrdSecEntity.hh
                                       XrdSec/XrdSecInterface.hh
+  XrdSec/XrdSecLoader.cc              XrdSec/XrdSecLoader.hh
   XrdSec/XrdSecPManager.cc            XrdSec/XrdSecPManager.hh
   XrdSec/XrdSecProtocolhost.cc        XrdSec/XrdSecProtocolhost.hh
   XrdSec/XrdSecServer.cc              XrdSec/XrdSecServer.hh
@@ -52,7 +53,6 @@ add_library(
   XrdSecpwd
   SHARED
   XrdSecpwd/XrdSecProtocolpwd.cc      XrdSecpwd/XrdSecProtocolpwd.hh
-  XrdSecpwd/XrdSecpwdSrvAdmin.cc
                                       XrdSecpwd/XrdSecpwdPlatform.hh )
 
 target_link_libraries(
@@ -148,23 +148,3 @@ install(
   ${PROJECT_SOURCE_DIR}/docs/man/xrdsssadmin.8
   ${PROJECT_SOURCE_DIR}/docs/man/xrdpwdadmin.8
   DESTINATION ${CMAKE_INSTALL_MANDIR}/man8 )
-
-install(
-  FILES
-  XrdSec/XrdSecEntity.hh
-  XrdSec/XrdSecInterface.hh
-  XrdSec/XrdSecTLayer.hh
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xrootd/XrdSec )
-
-install(
-  FILES
-  XrdSecsss/XrdSecsssID.hh
-  XrdSecsss/XrdSecsssKT.hh
-  XrdSecsss/XrdSecsssRR.hh
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xrootd/XrdSecsss )
-
-install(
-  FILES
-  XrdSecgsi/XrdSecProtocolgsi.hh
-  XrdSecgsi/XrdSecgsiTrace.hh
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xrootd/XrdSecgsi )

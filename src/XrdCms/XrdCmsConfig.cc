@@ -41,7 +41,6 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/un.h>
 #include <dirent.h>
 
 #include "XrdVersion.hh"
@@ -65,10 +64,12 @@
 #include "XrdCms/XrdCmsState.hh"
 #include "XrdCms/XrdCmsSupervisor.hh"
 #include "XrdCms/XrdCmsTrace.hh"
+#include "XrdCms/XrdCmsUtils.hh"
 #include "XrdCms/XrdCmsXmi.hh"
 #include "XrdCms/XrdCmsXmiReq.hh"
 
 #include "XrdNet/XrdNetOpts.hh"
+#include "XrdNet/XrdNetUtils.hh"
 #include "XrdNet/XrdNetSecurity.hh"
 #include "XrdNet/XrdNetSocket.hh"
 
@@ -82,7 +83,6 @@
 #include "XrdOuc/XrdOucStream.hh"
 #include "XrdOuc/XrdOucUtils.hh"
 
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysHeaders.hh"
 #include "XrdSys/XrdSysPlatform.hh"
@@ -119,7 +119,6 @@ using namespace XrdCms;
        XrdCmsXmi       *XrdCms::Xmi_Select = 0;
        XrdCmsXmi       *XrdCms::Xmi_Space  = 0;
        XrdCmsXmi       *XrdCms::Xmi_Stat   = 0;
-       XrdCmsXmi       *XrdCms::Xmi_Pref   = 0;
 
 /******************************************************************************/
 /*                S e c u r i t y   S y m b o l   T i e - I n                 */
@@ -208,21 +207,27 @@ int XrdCmsConfig::Configure1(int argc, char **argv, char *cfn)
 //
    opterr = 0; optind = 1;
    if (argc > 1 && '-' == *argv[1]) 
-      while ((c=getopt(argc,argv,"imsw")) && ((unsigned char)c != 0xff))
+      while ((c=getopt(argc,argv,"iw")) && ((unsigned char)c != 0xff))
      { switch(c)
        {
        case 'i': immed = 1;
                  break;
-       case 'm': isManager = 1;
-                 break;
-       case 's': isServer = 1;
-                 break;
        case 'w': immed = -1;   // Backward compatability only
                  break;
        default:  buff[0] = '-'; buff[1] = optopt; buff[2] = '\0';
-                 Say.Say("Config warning: unrecognized option,",buff,", ignored.");
+                 Say.Say("Config warning: unrecognized option, ",buff,", ignored.");
        }
      }
+
+// Accept a single parameter defining the overiding major role
+//
+   if (optind < argc)
+      {     if (!strcmp(argv[optind], "manager")) isManager = 1;
+       else if (!strcmp(argv[optind], "server" )) isServer  = 1;
+       else if (!strcmp(argv[optind], "super"  )) isServer  = isManager = 1;
+       else Say.Say("Config warning: unrecognized parameter, ",
+                    argv[optind],", ignored.");
+      }
 
 // Bail if no configuration file specified
 //
@@ -290,6 +295,10 @@ int XrdCmsConfig::Configure1(int argc, char **argv, char *cfn)
         myRole   = strdup(XrdCmsRole::Name(rid));
         myRoleID = static_cast<int>(rid);
       }
+
+// Export the role IN basic form
+//
+   XrdOucEnv::Export("XRDROLE", XrdCmsRole::Type(myRType));
 
 // For managers, make sure that we have a well designated port.
 // For servers or supervisors, force an ephemeral port to be used.
@@ -383,10 +392,11 @@ int XrdCmsConfig::Configure2()
 //
    if ((LocalRoot || RemotRoot) && ConfigN2N()) NoGo = 1;
 
-// Configure the OSS and the base filesystem
+// Configure the OSS, the base filesystem, and initialize the prep queue
 //
    if (!NoGo) NoGo = ConfigOSS();
    if (!NoGo) baseFS.Start();
+   if (!NoGo) PrepQ.Init();
 
 // Setup manager or server, as needed
 //
@@ -459,6 +469,7 @@ int XrdCmsConfig::ConfigXeq(char *var, XrdOucStream &CFile, XrdSysError *eDest)
    {
    TS_Xeq("adminpath",     xapath);  // Any,     non-dynamic
    TS_Xeq("allow",         xallow);  // Manager, non-dynamic
+   TS_Xeq("altds",         xaltds);  // Server,  non-dynamic
    TS_Xeq("defaults",      xdefs);   // Server,  non-dynamic
    TS_Xeq("dfs",           xdfs);    // Any,     non-dynamic
    TS_Xeq("export",        xexpo);   // Any,     non-dynamic
@@ -510,6 +521,7 @@ void XrdCmsConfig::DoIt()
 // Why? Because we never get a primary login if we are a mere manager.
 //
    if (isManager && !isServer && !ManList) doWait = 0;
+      else if (isServer && adsMon)         doWait = 1;
 
 // Start the notification thread if we need to
 //
@@ -616,7 +628,6 @@ void XrdCmsConfig::ConfigDefaults(void)
    extern long timezone;
    static XrdVERSIONINFODEF(myVer, cmsd, XrdVNUMBER, XrdVERSION);
    time_t myTime = time(0);
-   struct tm *tmP = localtime(&myTime);
    int myTZ, isEast = 0;
 
 // Preset all variables with common defaults
@@ -709,9 +720,13 @@ void XrdCmsConfig::ConfigDefaults(void)
    ossParms    = 0;
    ossFS       = 0;
    myVInfo     = &myVer;
+   adsPort     = 0;
+   adsMon      = 0;
+   adsProt     = 0;
 
 // Compute the time zone we are in
 //
+   localtime(&myTime);
    myTZ = timezone/(60*60);
    if (myTZ <= 0) {isEast = 0x10; myTZ = -myTZ;}
    if (myTZ > 12) myTZ = 12;
@@ -1130,8 +1145,7 @@ int XrdCmsConfig::setupXmi()
            {XMI_REMOVE, &Xmi_Remove, "remove"},
            {XMI_SELECT, &Xmi_Select, "select"},
            {XMI_SPACE,  &Xmi_Space,  "space"},
-           {XMI_STAT,   &Xmi_Stat,   "stat"},
-           {XMI_PREF,   &Xmi_Pref,   "pref"}};
+           {XMI_STAT,   &Xmi_Stat,   "stat"}};
    int numintab = sizeof(XmiTab)/sizeof(XmiTab[0]);
 
 // Fill out the rest of the XmiEnv structure
@@ -1234,6 +1248,62 @@ int XrdCmsConfig::xallow(XrdSysError *eDest, XrdOucStream &CFile)
 
     return 0;
 }
+  
+/******************************************************************************/
+/*                                x a l t d s                                 */
+/******************************************************************************/
+
+/* Function: xaltds
+
+   Purpose:  To parse the directive: altds xroot <port> [[no]monitor]
+
+             xroot  The protocol used by the alternate data server.
+             <port> The port being used by the alternate data server.
+               mon  Actively monitor alternate data server by connecting to it.
+                    This is the default.
+             nomon  Do not monitor the alternate data server.
+                    it and if <sec> is greater than zero, send "ping" requests
+                    every <sec> seconds. Zero merely connects.
+
+   Type: Manager only, non-dynamic.
+
+   Output: 0 upon success or !0 upon failure.
+*/
+
+int XrdCmsConfig::xaltds(XrdSysError *eDest, XrdOucStream &CFile)
+{
+    char *val;
+
+    if (isManager) return CFile.noEcho();
+
+    if (!(val = CFile.GetWord()))
+       {eDest->Emsg("Config", "protocol not specified"); return 1;}
+
+    if (strcmp(val, "xroot"))
+       {eDest->Emsg("Config", "unsupported protocol, '", val, "'."); return 1;}
+    if (adsProt) free(adsProt);
+    adsProt = strdup(val);
+
+    if (!(val = CFile.GetWord()))
+       {eDest->Emsg("Config", "data server port not specified"); return 1;}
+
+    if (isdigit(*val))
+       {if (XrdOuca2x::a2i(*eDest,"data server port",val,&adsPort,1,65535))
+           return 1;
+       }
+       else if (!(adsPort = XrdNetUtils::ServPort(val, "tcp")))
+               {eDest->Emsg("Config", "Unable to find tcp service '",val,"'.");
+                return 1;
+               }
+
+         if (!(val = CFile.GetWord()) || !strcmp(val, "monitor")) adsMon  = 1;
+    else if (!strcmp(val, "nomonitor")) adsMon  = 0;
+    else    {eDest->Emsg("Config", "invalid option, '", val, "'.");
+             return 1;
+            }
+
+    return 0;
+}
 
 /******************************************************************************/
 /*                                x a p a t h                                 */
@@ -1254,7 +1324,6 @@ int XrdCmsConfig::xapath(XrdSysError *eDest, XrdOucStream &CFile)
 {
     char *pval, *val;
     mode_t mode = S_IRWXU;
-    struct sockaddr_un USock;
 
 // Get the path
 //
@@ -1266,13 +1335,6 @@ int XrdCmsConfig::xapath(XrdSysError *eDest, XrdOucStream &CFile)
 //
    if (*pval != '/')
       {eDest->Emsg("Config", "adminpath not absolute"); return 1;}
-
-// Make sure path is not too long (account for "/olbd.admin")
-//                                              12345678901
-   if (strlen(pval) > sizeof(USock.sun_path) - 11)
-      {eDest->Emsg("Config", "admin path", pval, "is too long");
-       return 1;
-      }
    pval = strdup(pval);
 
 // Get the optional access rights
@@ -1758,14 +1820,16 @@ int XrdCmsConfig::xmang(XrdSysError *eDest, XrdOucStream &CFile)
     char **val1, **val2;
     };
 
-    static const int sockALen = sizeof(struct sockaddr);
-    struct sockaddr InetAddr[8];
-    XrdOucTList *tp = 0, *tpp = 0, *tpnew;
-    char *val, *bval = 0, *mval = 0;
-    StorageHelper SHelp(&bval, &mval);
-    int j, i, multi = 0, port = 0, xMeta = 0, xPeer = 0, xProxy = 0, Prt = 1;
+    XrdOucTList **theList = &ManList;
+    char *val, *hSpec = 0, *hPort = 0;
+    StorageHelper SHelp(&hSpec, &hPort);
+    int rc, xMeta = 0, xPeer = 0, xProxy = 0, *myPort = 0;
 
-//  Process the optional "peer" or "proxy"
+// Ignore this call if we are a meta-manager and know our port number
+//
+   if (isMeta && PortTCP > 0) return CFile.noEcho();
+
+//  Process the optional "meta", "peer" or "proxy"
 //
     if ((val = CFile.GetWord()))
        {if ((xMeta  = !strcmp("meta", val))
@@ -1783,94 +1847,41 @@ int XrdCmsConfig::xmang(XrdSysError *eDest, XrdOucStream &CFile)
     if (val)
        if (!strcmp("any", val) || !strcmp("all", val)) val = CFile.GetWord();
 
-//  Get the actual host name
+//  Get the actual host name and copy it
 //
     if (!val)
        {eDest->Emsg("Config","manager host name not specified"); return 1;}
-    mval = strdup(val);
+    hSpec = strdup(val);
 
-//  Grab the port number
+//  Grab the port number (either in hostname or following token)
 //
-    if ((val = index(mval, ':'))) {*val = '\0'; val++;}
-       else val = CFile.GetWord();
+    if (!(hPort = XrdCmsUtils::ParseManPort(eDest, CFile, hSpec))) return 1;
 
-    if (val)
-       {if (isdigit(*val))
-           {if (XrdOuca2x::a2i(*eDest,"manager port",val,&port,1,65535))
-               port = 0;
-           }
-           else if (!(port = XrdSysDNS::getPort(val, "tcp")))
-                   {eDest->Emsg("Config", "Unable to find tcp service '",val,"'.");
-                    port = 0;
-                   }
-       }
-       else if (!(port = PortTCP))
-               eDest->Emsg("Config","manager port not specified for",mval);
-
-    if (!port) return 1;
-
-    if ((val = CFile.GetWord()))
-       {if (strcmp(val, "if"))
-           {eDest->Emsg("Config","expecting manager 'if' but",val,"found");
-            return 1;
-           }
-        if ((i=XrdOucUtils::doIf(eDest,CFile,"manager directive",
-                            myName,myInsName,myProg))<=0)
-           {if (!i) CFile.noEcho(); return i < 0;}
-       }
-
-    i = strlen(mval);
-    if (mval[i-1] != '+') 
-       {i = 1;
-        if (!XrdSysDNS::getHostAddr(mval, InetAddr))
-           {eDest->Emsg("CFile","Manager host", mval, "not found");
-            return 1;
-           }
-        free(mval); mval = XrdSysDNS::getHostName(InetAddr[0]);
-       }
-        else {bval = strdup(mval); mval[i-1] = '\0'; multi = 1;
-              if (!(i = XrdSysDNS::getHostAddr(mval, InetAddr, 8)))
-                 {eDest->Emsg("CFile","Manager host", mval, "not found");
-                  return 1;
-                 }
-             }
-
-// Now try to determine our port number if we are a [meta] manager
+// Check if this statement is gaurded by and "if" and process it
 //
-    if (isManager && !isServer)
-       {if ((xMeta && isMeta) || (!xMeta && !isMeta))
-           for (j = 0; j < i; j++)
-                if (!memcmp(&InetAddr[j], &myAddr, sockALen))
-                   {PortTCP = port; break;}
-        if (isMeta) return (xMeta ? 0: CFile.noEcho());
-        if (!xMeta) Prt = 0;
+   if ((val = CFile.GetWord()))
+      {if (strcmp(val, "if"))
+          {eDest->Emsg("Config","expecting manager 'if' but",val,"found");
+           return 1;
+          }
+       if ((rc = XrdOucUtils::doIf(eDest,CFile,"manager directive",
+                                   myName,myInsName,myProg))<=0)
+          {if (!rc) CFile.noEcho(); return rc < 0;}
+      }
+
+// Calculate the correct queue and port number to update
+//
+   if (isManager && !isServer)
+//    {if (((xMeta && isMeta) || (!xMeta && !isMeta)) && PortTCP < 1)
+      {if (((xMeta && isMeta) || (!xMeta && !isMeta)))
+          myPort = &PortTCP;
+        if (isMeta) theList = 0;
+           else theList = (xMeta ? &ManList : &NanList);
        }
 
-// Now construct the list of [meta] managers
+// Parse the specification and return
 //
-    do {if (multi)
-           {free(mval);
-            char mvBuff[1024];
-            if (Prt) sprintf(mvBuff, "%s -> all.manager ", bval);
-            mval = XrdSysDNS::getHostName(InetAddr[i-1]);
-            if (Prt) eDest->Say("Config ", mvBuff, mval);
-           }
-        tp = (Prt ? ManList : NanList); tpp = 0; j = 1;
-        while(tp) 
-             if ((j = strcmp(tp->text, mval)) < 0 || tp->val != port)
-                {tpp = tp; tp = tp->next;}
-                else {if (Prt && !j)
-                         eDest->Say("Config warning: duplicate manager ",mval);
-                      break;
-                     }
-        if (j) {tpnew = new XrdOucTList(mval, port, tp);
-                if (tpp) tpp->next = tpnew;
-                   else if (Prt) ManList = tpnew;
-                           else  NanList = tpnew;
-               }
-       } while(--i);
-
-    return 0;
+   return (XrdCmsUtils::ParseMan(eDest, theList, hSpec, hPort, myPort) ? 0 : 1);
 }
   
 /******************************************************************************/
@@ -2353,7 +2364,7 @@ int XrdCmsConfig::xrole(XrdSysError *eDest, XrdOucStream &CFile)
 {
     XrdCmsRole::RoleID roleID;
     char *val, *Tok1, *Tok2;
-    int rc, xMeta=0, xPeer=0, xProxy=0, xServ=0, xMan=0, xSolo=0, xSup=0;
+    int rc, xMeta=0, xPeer=0, xProxy=0, xServ=0, xMan=0, xSolo=0;
 
 // Get the first token
 //
@@ -2388,7 +2399,7 @@ int XrdCmsConfig::xrole(XrdSysError *eDest, XrdOucStream &CFile)
    switch(roleID)
          {case XrdCmsRole::MetaManager:  xMeta  = xMan  =         -1; break;
           case XrdCmsRole::Manager:               xMan  =         -1; break;
-          case XrdCmsRole::Supervisor:   xSup   = xMan  = xServ = -1; break;
+          case XrdCmsRole::Supervisor:            xMan  = xServ = -1; break;
           case XrdCmsRole::Server:                        xServ = -1; break;
           case XrdCmsRole::ProxyManager: xProxy = xMan  =         -1; break;
           case XrdCmsRole::ProxySuper:   xProxy = xMan  = xServ = -1; break;
@@ -2407,7 +2418,7 @@ int XrdCmsConfig::xrole(XrdSysError *eDest, XrdOucStream &CFile)
 // If the role was specified on the command line, issue warning and ignore this
 //
    if (isServer > 0 || isManager > 0 || isProxy > 0 || isPeer > 0)
-      {eDest->Say("Config warning: role directive over-ridden by command line options.");
+      {eDest->Say("Config warning: role directive over-ridden by command line.");
        return 0;
       }
 

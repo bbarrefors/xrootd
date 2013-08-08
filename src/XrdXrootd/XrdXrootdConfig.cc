@@ -35,7 +35,12 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/un.h>
+
+#ifdef __solaris__
+#include <sys/isa_defs.h>
+#endif
+
+#include <limits>
 
 #include "XrdVersion.hh"
 
@@ -51,7 +56,6 @@
 #include "XrdOuc/XrdOucStream.hh"
 #include "XrdOuc/XrdOucTrace.hh"
 #include "XrdOuc/XrdOucUtils.hh"
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysHeaders.hh"
 #include "XrdSys/XrdSysLogger.hh"
@@ -103,8 +107,6 @@ extern          XrdOucTrace       *XrdXrootdTrace;
 
                 XrdXrootdPrepare  *XrdXrootdPrepQ;
 
-                XrdOucReqID       *XrdXrootdReqID;
-
                 const char        *XrdXrootdInstance;
 
                 int                XrdXrootdPort;
@@ -127,16 +129,19 @@ int XrdXrootdProtocol::Configure(char *parms, XrdProtocol_Config *pi)
                              XrdSysLogger     *Logger,
                              const char       *configFn,
                              XrdOucEnv        *EnvInfo);
+
    extern XrdSecService    *XrdXrootdloadSecurity(XrdSysError *, char *, 
                                                   char *, void **);
-   extern XrdSfsFileSystem *XrdXrootdloadFileSystem(XrdSysError *, char *, 
-                                                    const char *);
+
+   extern XrdSfsFileSystem *XrdXrootdloadFileSystem(XrdSysError *, 
+                                                    XrdSfsFileSystem *,
+                                                    char *, const char *);
    extern int optind, opterr;
 
    XrdXrootdXPath *xp;
    void *secGetProt = 0;
-   char *adminp, *fsver, *rdf, *bP, *tmp, c, buff[1024];
-   int i, n, deper = 0, iamaMan = 0;
+   char *adminp, *rdf, *bP, *tmp, c, buff[1024];
+   int i, n, deper = 0;
 
 // Copy out the special info we want to use at top level
 //
@@ -243,9 +248,9 @@ int XrdXrootdProtocol::Configure(char *parms, XrdProtocol_Config *pi)
 
 // Get the filesystem to be used
 //
-   if (FSLib)
-      {TRACE(DEBUG, "Loading filesystem library " <<FSLib);
-       osFS = XrdXrootdloadFileSystem(&eDest, FSLib, pi->ConfigFN);
+   if (FSLib[0])
+      {TRACE(DEBUG, "Loading base filesystem library " <<FSLib[0]);
+       osFS = XrdXrootdloadFileSystem(&eDest, 0, FSLib[0], pi->ConfigFN);
       } else {
        XrdOucEnv myEnv;
        myEnv.PutPtr("XrdInet*", (void *)(pi->NetTCP));
@@ -257,21 +262,22 @@ int XrdXrootdProtocol::Configure(char *parms, XrdProtocol_Config *pi)
        return 0;
       } else SI->setFS(osFS);
 
-// Check if the file system version matches our version
+// Check if we have a wrapper library
 //
-   if (chkfsV)
-      {fsver = (char *)osFS->getVersion();
-       if (strcmp(XrdVERSION, fsver))
-          eDest.Emsg("Config", "Warning! xrootd build version " XrdVERSION
-                               "differs from file system version ", fsver);
+   if (FSLib[1])
+      {TRACE(DEBUG, "Loading wrapper filesystem library " <<FSLib[0]);
+       osFS = XrdXrootdloadFileSystem(&eDest, osFS, FSLib[0], pi->ConfigFN);
+       if (!osFS)
+          {eDest.Emsg("Config", "Unable to load file system wrapper.");
+           return 0;
+          }
       }
 
 // Check if we are going to be processing checksums locally
 //
-   if (JobCKT)
+   if (JobCKT && JobLCL)
       {XrdOucErrInfo myError("Config");
-       JobQCS = (osFS->chksum(XrdSfsFileSystem::csSize,JobCKT,0,myError) ? 0:1);
-       if (!JobQCS && (JobLCL || !JobCKS))
+       if (osFS->chksum(XrdSfsFileSystem::csSize,JobCKT,0,myError))
           {eDest.Emsg("Config", JobCKT, " checksum is not natively supported.");
            return 0;
           }
@@ -296,8 +302,7 @@ int XrdXrootdProtocol::Configure(char *parms, XrdProtocol_Config *pi)
 
 // Initialize the request ID generation object
 //
-   XrdXrootdReqID = new XrdOucReqID((int)Port, pi->myName,
-                                    XrdSysDNS::IPAddr(pi->myAddr));
+   PrepID = new XrdOucReqID(pi->urAddr, (int)Port);
 
 // Initialize for prepare processing
 //
@@ -311,7 +316,7 @@ int XrdXrootdProtocol::Configure(char *parms, XrdProtocol_Config *pi)
    if ((rdf = getenv("XRDREDIRECT"))
    && (!strcmp(rdf, "R") || !strcmp(rdf, "M")))
       {isRedir = *rdf;
-       myRole = kXR_isManager; myRolf = kXR_LBalServer; iamaMan = 1;
+       myRole = kXR_isManager; myRolf = kXR_LBalServer;
        if (!strcmp(rdf, "M"))  myRole |=kXR_attrMeta;
       } 
    if (getenv("XRDREDPROXY"))  myRole |=kXR_attrProxy;
@@ -333,7 +338,7 @@ int XrdXrootdProtocol::Configure(char *parms, XrdProtocol_Config *pi)
       {int k;
        const char *cgi1, *cgi2;
        char buff[1024], xCgi[RD_Num] = {0};
-       if (iamaMan) {cgi1 = "+"; cgi2 = getenv("XRDCMSCLUSTERID");}
+       if (isRedir) {cgi1 = "+"; cgi2 = getenv("XRDCMSCLUSTERID");}
           else      {cgi1 = "";  cgi2 = pi->myName;}
        do {k = xp->Opts();
            sprintf(buff, " to %s:%d", Route[k].Host, Route[k].Port);
@@ -498,8 +503,8 @@ int XrdXrootdProtocol::xasync(XrdOucStream &Config)
     int  V_limit=-1, V_msegs=-1, V_mtot=-1, V_minsz=-1, V_segsz=-1;
     int  V_minsf=-1;
     long long llp;
-    static struct asyncopts {const char *opname; int minv; int *oploc;
-                             const char *opmsg;} asopts[] =
+    struct asyncopts {const char *opname; int minv; int *oploc;
+                      const char *opmsg;} asopts[] =
        {
         {"force",     -1, &V_force, ""},
         {"off",       -1, &V_off,   ""},
@@ -695,36 +700,76 @@ int XrdXrootdProtocol::xexpdo(char *path, int popt)
 
 /* Function: xfsl
 
-   Purpose:  To parse the directive: fslib [?] <path>
+   Purpose:  To parse the directive: fslib [?] [throttle | <fspath2>]
+                                               {default  | <fspath1>}
 
              ?         check if fslib build version matches our version
-             <path>    the path of the filesystem library to be used.
+                       This is ignored now because it's always done.
+             throttle  load libXrdThrottle.so as the head interface.
+             <fspath2> load the named library as the head interface.
+             default   load libXrdOfs.so ro libXrdPss.so as the tail
+                       interface. This is the default.
+             <fspath1> load the named library as the tail interface.
 
   Output: 0 upon success or !0 upon failure.
 */
 
 int XrdXrootdProtocol::xfsl(XrdOucStream &Config)
 {
-    char *val, *Slash;
+    char *val;
+
+// Clear storage pointers
+//
+   if (FSLib[0]) {free(FSLib[0]); FSLib[0] = 0;}
+   if (FSLib[1]) {free(FSLib[1]); FSLib[1] = 0;}
 
 // Get the path
 //
-   chkfsV = 0;
-   if ((val = Config.GetWord()) && *val == '?' && !val[1])
-      {chkfsV = '?'; val = Config.GetWord();}
-
-   if (!val || !val[0])
+   if (!(val = Config.GetWord()))
       {eDest.Emsg("Config", "fslib not specified"); return 1;}
+
+// Check if this is "thottle"
+//
+   if (!strcmp("throttle", val))
+      {FSLib[1] = strdup("libXrdThrottle.so");
+       if (!(val = Config.GetWord()))
+          {eDest.Emsg("Config","fslib throttle target library not specified");
+           return 1;
+          }
+       if (!strcmp("default", val)) return 0;
+       FSLib[0] = xfsL(val);
+       return 0;
+      }
+
+// Check for default or default library, the common case
+//
+   if (!strcmp("default", val) || !(FSLib[1] = xfsL(val))) return 0;
+
+// If we dont have another token, then demote the previous library
+//
+   if (!(val = Config.GetWord()))
+      {FSLib[0] = FSLib[1]; FSLib[1] = 0; return 0;}
+
+// Check for default or default library, the common case
+//
+   if (strcmp("default", val)) FSLib[0] = xfsL(val);
+   return 0;
+}
+
+/******************************************************************************/
+
+char *XrdXrootdProtocol::xfsL(char *val)
+{
+    char *Slash;
 
 // If this is the "standard" name tell the user that we are ignoring this lib.
 // Otherwise, record the path and return.
 //
    if (!(Slash = rindex(val, '/'))) Slash = val;
-   if (!strcmp(Slash, "/libXrdOfs.so"))
+      else Slash++;
+   if (!strcmp(Slash, "libXrdOfs.so"))
       eDest.Say("Config warning: ignoring fslib; libXrdOfs.so is built-in.");
-      else {if (FSLib) free(FSLib);
-            FSLib = strdup(val);
-           }
+      else return strdup(val);
    return 0;
 }
 
@@ -777,24 +822,33 @@ int XrdXrootdProtocol::xlog(XrdOucStream &Config)
 /* Function: xmon
 
    Purpose:  Parse directive: monitor [all] [auth]  [flush [io] <sec>]
+                                      [fstat <sec> [lfn] [ops] [ssq] [xfr <n>]
                                       [ident <sec>] [mbuff <sz>] [rbuff <sz>]
                                       [rnums <cnt>] [window <sec>]
                                       dest [Events] <host:port>
 
-   Events: [files] [info] [io] [iov] [redir] [user]
+   Events: [files] [fstat] [info] [io] [iov] [redir] [user]
 
          all                enables monitoring for all connections.
          auth               add authentication information to "user".
          flush  [io] <sec>  time (seconds, M, H) between auto flushes. When
                             io is given applies only to i/o events.
+         fstat  <sec>       produces an "f" stream for open & close events
+                            <sec> specifies the flush interval (also see xfr)
+                            lfn    - adds lfn to the open event
+                            ops    - adds the ops record when the file is closed
+                            ssq    - computes the sum of squares for the ops rec
+                            xfr <n>- inserts i/o stats for open files every
+                                     <sec>*<n>. Minimum is 1.
          ident  <sec>       time (seconds, M, H) between identification records.
          mbuff  <sz>        size of message buffer for event trace monitoring.
          rbuff  <sz>        size of message buffer for redirection monitoring.
-         rnums  <cnt.       bumber of redirections monitoring streams.
+         rnums  <cnt>       bumber of redirections monitoring streams.
          window <sec>       time (seconds, M, H) between timing marks.
          dest               specified routing information. Up to two dests
                             may be specified.
          files              only monitors file open/close events.
+         fstats             vectors the "f" stream to the destination
          info               monitors client appid and info requests.
          io                 monitors I/O requests, and files open/close events.
          iov                like I/O but also unwinds vector reads.
@@ -809,15 +863,16 @@ int XrdXrootdProtocol::xmon(XrdOucStream &Config)
                                   "monitor rbuff value not specified",
                                   "monitor mbuff", "monitor rbuff"
                                  };
-    char  *val, *cp, *monDest[2] = {0, 0};
+    char  *val = 0, *cp, *monDest[2] = {0, 0};
     long long tempval;
     int i, monFlash = 0, monFlush=0, monMBval=0, monRBval=0, monWWval=0;
     int    monIdent = 3600, xmode=0, monMode[2] = {0, 0}, mrType, *flushDest;
-    int    monRnums = 0;
+    int    monRnums = 0, monFSint = 0, monFSopt = 0, monFSion = 0;
+    int    haveWord = 0;
 
-    while((val = Config.GetWord()))
-
-         {     if (!strcmp("all",  val)) xmode = XROOTD_MON_ALL;
+    while(haveWord || (val = Config.GetWord()))
+         {haveWord = 0;
+               if (!strcmp("all",  val)) xmode = XROOTD_MON_ALL;
           else if (!strcmp("auth",  val))
                   monMode[0] = monMode[1] = XROOTD_MON_AUTH;
           else if (!strcmp("flush", val))
@@ -831,6 +886,28 @@ int XrdXrootdProtocol::xmon(XrdOucStream &Config)
                  if (XrdOuca2x::a2tm(eDest,"monitor flush",val,
                                            flushDest,1)) return 1;
                 }
+          else if (!strcmp("fstat",val))
+                  {if (!(val = Config.GetWord()))
+                      {eDest.Emsg("Config", "monitor fstat value not specified");
+                       return 1;
+                      }
+                   if (XrdOuca2x::a2tm(eDest,"monitor fstat",val,
+                                             &monFSint,0)) return 1;
+                   while((val = Config.GetWord()))
+                        if (!strcmp("lfn", val)) monFSopt |=  XROOTD_MON_FSLFN;
+                   else if (!strcmp("ops", val)) monFSopt |=  XROOTD_MON_FSOPS;
+                   else if (!strcmp("ssq", val)) monFSopt |=  XROOTD_MON_FSSSQ;
+                   else if (!strcmp("xfr", val))
+                           {if (!(val = Config.GetWord()))
+                               {eDest.Emsg("Config", "monitor fstat xfr count not specified");
+                                return 1;
+                               }
+                            if (XrdOuca2x::a2i(eDest,"monitor fstat io count",
+                                               val, &monFSion,1)) return 1;
+                            monFSopt |=  XROOTD_MON_FSXFR;
+                           }
+                   else {haveWord = 1; break;}
+                  }
           else if (!strcmp("mbuff",val) || !strcmp("rbuff",val))
                   {mrType = (*val == 'r');
                    if (!(val = Config.GetWord()))
@@ -873,6 +950,7 @@ int XrdXrootdProtocol::xmon(XrdOucStream &Config)
         {if (strcmp("dest", val)) break;
          while((val = Config.GetWord()))
                    if (!strcmp("files",val)) monMode[i] |=  XROOTD_MON_FILE;
+              else if (!strcmp("fstat",val)) monMode[i] |=  XROOTD_MON_FSTA;
               else if (!strcmp("info", val)) monMode[i] |=  XROOTD_MON_INFO;
               else if (!strcmp("io",   val)) monMode[i] |=  XROOTD_MON_IO;
               else if (!strcmp("iov",  val)) monMode[i] |= (XROOTD_MON_IO
@@ -910,13 +988,26 @@ int XrdXrootdProtocol::xmon(XrdOucStream &Config)
    if (monMode[0] & XROOTD_MON_IO) monMode[0] |= XROOTD_MON_FILE;
    if (monMode[1] & XROOTD_MON_IO) monMode[1] |= XROOTD_MON_FILE;
 
+// If ssq was specified, make sure we support IEEE754 floating point
+//
+#if !defined(__solaris__) || !defined(_IEEE_754)
+   if (monFSopt & XROOTD_MON_FSSSQ && !(std::numeric_limits<double>::is_iec559))
+      {monFSopt &= !XROOTD_MON_FSSSQ;
+       eDest.Emsg("Config","Warning, 'fstat ssq' ignored; platform does not "
+                           "use IEEE754 floating point.");
+      }
+#endif
+
 // Set the monitor defaults
 //
    XrdXrootdMonitor::Defaults(monMBval, monRBval, monWWval,
-                              monFlush, monFlash, monIdent, monRnums);
+                              monFlush, monFlash, monIdent, monRnums,
+                              monFSint, monFSopt, monFSion);
+
    if (monDest[0]) monMode[0] |= (monMode[0] ? xmode : XROOTD_MON_FILE|xmode);
    if (monDest[1]) monMode[1] |= (monMode[1] ? xmode : XROOTD_MON_FILE|xmode);
    XrdXrootdMonitor::Defaults(monDest[0],monMode[0],monDest[1],monMode[1]);
+
    return 0;
 }
   
@@ -1082,7 +1173,7 @@ int XrdXrootdProtocol::xred(XrdOucStream &Config)
            }
         for (k = static_cast<int>(RD_open1); k < RD_Num; k++)
             if (!Route[k].Host
-            || (strcmp(Route[k].Host, rHost) && Route[k].Port == rPort)) break;
+            || (!strcmp(Route[k].Host, rHost) && Route[k].Port == rPort)) break;
         if (k >= RD_Num)
            {eDest.Emsg("Config", "too many diffrent path redirects"); return 1;}
         xred_set(RD_func(k), rHost, rPort);

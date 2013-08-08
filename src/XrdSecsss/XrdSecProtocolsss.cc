@@ -39,13 +39,13 @@
 
 #include "XrdVersion.hh"
 
+#include "XrdNet/XrdNetUtils.hh"
 #include "XrdOuc/XrdOucCRC.hh"
 #include "XrdOuc/XrdOucErrInfo.hh"
 #include "XrdOuc/XrdOucEnv.hh"
 #include "XrdOuc/XrdOucPup.hh"
 #include "XrdOuc/XrdOucTokenizer.hh"
 #include "XrdSecsss/XrdSecProtocolsss.hh"
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdSys/XrdSysHeaders.hh"
 #include "XrdSys/XrdSysPlatform.hh"
 #include "XrdSys/XrdSysPthread.hh"
@@ -292,8 +292,14 @@ XrdSecCredentials *XrdSecProtocolsss::getCredentials(XrdSecParameters *parms,
 /*                           I n i t _ C l i e n t                            */
 /******************************************************************************/
 
+namespace
+{
+XrdSysMutex initMutex;
+};
+
 int XrdSecProtocolsss::Init_Client(XrdOucErrInfo *erp, const char *pP)
 {
+   XrdSysMutexHelper initMon(&initMutex);
    XrdSecsssKT *ktP;
    struct stat buf;
    char *Colon;
@@ -369,7 +375,7 @@ char *XrdSecProtocolsss::Load_Client(XrdOucErrInfo *erp, const char *parms)
 
 // Get our full host name
 //
-   if (!(myName = XrdSysDNS::getHostName()))
+   if (!(myName = XrdNetUtils::MyHostName(0)))
       {Fatal(erp, "Load_Client", ENOENT, "Unable to obtain local hostname.");
        return (char *)0;
       }
@@ -409,7 +415,7 @@ char *XrdSecProtocolsss::Load_Client(XrdOucErrInfo *erp, const char *parms)
 
 // All done
 //
-   return strdup("");
+   return (char *)"";
 }
   
 /******************************************************************************/
@@ -648,8 +654,15 @@ XrdSecCredentials *XrdSecProtocolsss::Encode(XrdOucErrInfo      *einfo,
        XrdOucPup::Pack(&eodP, myIP);
        dLen = eodP - (char *)rrData;
       } else {
-       CLDBG("No IP address to encode (" <<(einfo==0) <<(errEnv==0)
-             <<(myIP==0) <<")!");
+       char ipBuff[256];
+       if (epAddr.SockFD() > 0
+       &&  XrdNetUtils::IPFormat(-(epAddr.SockFD()), ipBuff, sizeof(ipBuff)))
+          {XrdOucPup::Pack(&eodP, ipBuff);
+           dLen = eodP - (char *)rrData;
+          } else {
+            CLDBG("No IP address to encode (" <<(einfo==0) <<(errEnv==0)
+                  <<(myIP==0) <<")!");
+          }
       }
 
 // Add in our host name for source verification
@@ -736,7 +749,7 @@ int XrdSecProtocolsss::getCred(XrdOucErrInfo    *einfo,
    XrdSecsssKT::ktEnt  decKey;
    XrdSecsssRR_Data    prData;
    char *lidP = 0, *idP, *dP, *eodP, idType;
-   int lidSz, idSz, dLen;
+   int idSz, dLen;
 
 // Decode the credentials
 //
@@ -759,8 +772,8 @@ int XrdSecProtocolsss::getCred(XrdOucErrInfo    *einfo,
          ||  !idP || *idP == '\0')
             return Fatal(einfo, "getCred", EINVAL, "Invalid id string.");
          switch(idType)
-               {case XrdSecsssRR_Data::theLgid: lidP = idP; lidSz = idSz; break;
-                case XrdSecsssRR_Data::theRand:                           break;
+               {case XrdSecsssRR_Data::theLgid: lidP = idP; break;
+                case XrdSecsssRR_Data::theRand:             break;
                 default: return Fatal(einfo,"getCred",EINVAL,"Invalid id type.");
                }
         }
@@ -797,7 +810,7 @@ int XrdSecProtocolsss::getCred(XrdOucErrInfo    *einfo,
   
 char *XrdSecProtocolsss::getLID(char *buff, int blen)
 {
-   char *dot;
+   const char *dot;
 
 // Extract out the loginid from the trace id
 //
@@ -843,9 +856,12 @@ char *XrdSecProtocolsss::setID(char *id, char **idP)
 /*                                 s e t I P                                  */
 /******************************************************************************/
   
-void XrdSecProtocolsss::setIP(const struct sockaddr *sockP)
+void XrdSecProtocolsss::setIP(XrdNetAddrInfo &endPoint)
 {
-   if (!XrdSysDNS::IPFormat(sockP, urIP, sizeof(urIP))) *urIP = 0;
+   if (!endPoint.Format(urIP, sizeof(urIP), XrdNetAddrInfo::fmtAdv6,
+                                            XrdNetAddrInfo::old6Map4)) *urIP=0;
+   epAddr = endPoint;
+   Entity.addrInfo = &epAddr;
 }
   
 /******************************************************************************/
@@ -880,7 +896,7 @@ extern "C"
 {
 XrdSecProtocol *XrdSecProtocolsssObject(const char              mode,
                                         const char             *hostname,
-                                        const struct sockaddr  &netaddr,
+                                              XrdNetAddrInfo   &endPoint,
                                         const char             *parms,
                                               XrdOucErrInfo    *erp)
 {
@@ -889,7 +905,7 @@ XrdSecProtocol *XrdSecProtocolsssObject(const char              mode,
 
 // Get a new protocol object
 //
-   if (!(prot = new XrdSecProtocolsss(hostname, &netaddr)))
+   if (!(prot = new XrdSecProtocolsss(hostname, endPoint)))
       XrdSecProtocolsss::Fatal(erp, "sss_Object", ENOMEM,
                          "Secsss: Insufficient memory for protocol.");
       else {Ok = (mode == 'c' ? prot->Init_Client(erp, parms)

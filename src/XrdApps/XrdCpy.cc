@@ -39,9 +39,11 @@
 //////////////////////////////////////////////////////////////////////////
 
 #include "XrdClient/XrdClientUrlInfo.hh"
+#include "XrdClient/XrdClientReadCache.hh"
 #include "XrdSys/XrdSysPthread.hh"
 #include "XrdClient/XrdClient.hh"
 #include "XrdClient/XrdCpMthrQueue.hh"
+#include "XrdClient/XrdClientConn.hh"
 #include "XrdClient/XrdClientDebug.hh"
 #include "XrdClient/XrdCpWorkLst.hh"
 #include "XrdClient/XrdClientEnv.hh"
@@ -71,6 +73,7 @@
 #endif
 #include <stdarg.h>
 #include <stdio.h>
+#include <sstream>
 
 #ifdef HAVE_LIBZ
 #include <zlib.h>
@@ -82,9 +85,10 @@
   
 namespace XrdCopy
 {
-XrdCpConfig  Config("xrdcpy");
+XrdCpConfig  Config("xrdcp");
 XrdCksData   srcCksum, dstCksum;
 XrdCksCalc  *csObj;
+XrdClient   *tpcSrc;
 char         tpcKey[32];
 long long    tpcFileSize;
 pthread_t    tpcTID;
@@ -709,7 +713,7 @@ char *genDestCgi(XrdClient *xrdsrc, const char *src)
          } iKey;
    XrdClientStatInfo stat;
    XrdOucString dCGI;
-   int myKey[3], xTTL = 0;
+   int myKey[3];
    const char *Path, *cksVal, *cgiP;
    char *qP, aszBuff[128], lfnBuff[1032], cgiBuff[2048];
 
@@ -741,7 +745,9 @@ char *genDestCgi(XrdClient *xrdsrc, const char *src)
 
 // Generate the cgi for the destination
 //
-   cgiP = XrdOucTPC::cgiC2Dst(tpcKey, xrdsrc->GetCurrentUrl().Host.c_str(),
+   std::ostringstream o; o << xrdsrc->GetCurrentUrl().Host.c_str() << ":";
+   o << xrdsrc->GetCurrentUrl().Port;
+   cgiP = XrdOucTPC::cgiC2Dst(tpcKey, o.str().c_str(),
                               lfnBuff, cksVal, cgiBuff, sizeof(cgiBuff));
    if (*cgiP == '!')
       {EMSG("Unable to setup destination url. " <<cgiP+1); return 0;}
@@ -776,12 +782,25 @@ int doCp_xrd3xrd(XrdClient *xrddest, const char *src, const char *dst)
                     ~sdHelper() {if (Src) delete Src;}
          } Client;
    XrdClientUrlInfo dUrl;
-   XrdOucString sUrl(src);
-   pthread_t myTID;
+   XrdOucString sUrl(tpcSrc->GetCurrentUrl().GetUrl().c_str());
+   XrdOucString *rCGI, dstUrl;
    int xTTL = -1;
    const char *cgiP;
-   char *qP;
    char cgiBuff[1024];
+
+// Append any redirection cgi information to our source spec
+//
+   rCGI = &(tpcSrc->GetClientConn()->fRedirCGI);
+   if (rCGI->length() > 0)
+      {if (sUrl.find("?") == STR_NPOS) sUrl += '?';
+          else sUrl += '&';
+       sUrl += *rCGI;
+      }
+
+//cerr <<"tpc: bfr src=" <<src <<endl;
+//cerr <<"tpc: bfr dst=" <<dst <<endl;
+//cerr <<"tpc: bfr scl=" <<tpcSrc->GetCurrentUrl().GetUrl().c_str() <<endl;
+//cerr <<"tpc: bfr dcl=" <<xrddest->GetCurrentUrl().GetUrl().c_str() <<endl;
 
 // Verify that the destination supports 3rd party stuff
 //
@@ -799,7 +818,8 @@ int doCp_xrd3xrd(XrdClient *xrddest, const char *src, const char *dst)
    if (sUrl.find("?") == STR_NPOS) sUrl += '?';
       else sUrl += '&';
    sUrl += cgiBuff;
-// cerr <<"Src  url: " <<sUrl.c_str() <<endl;
+//cerr <<"tpc: aft scl=" <<sUrl.c_str()<<endl;
+//cerr <<"tpc: aft dcl=" <<xrddest->GetCurrentUrl().GetUrl().c_str() <<endl;
 
 // Open the source
 //
@@ -812,7 +832,9 @@ int doCp_xrd3xrd(XrdClient *xrddest, const char *src, const char *dst)
 //
    tpcPB = !Config.Want(XrdCpConfig::DoNoPbar);
    if (tpcPB)
-      {dUrl = xrddest->GetCurrentUrl();
+//    {dUrl = xrddest->GetCurrentUrl();
+//cerr <<"tpc: pbr dcl=" <<dst<<endl;
+      {dstUrl = dst; dUrl = dstUrl;
        tpcPB = !XrdSysThread::Run(&tpcTID, doProgBar, (void *)&dUrl,
                                   XRDSYSTHREAD_HOLD);
       }
@@ -1068,7 +1090,7 @@ int doCp_xrd2loc(const char *src, const char *dst) {
    if (strcmp(dst, "-"))
       // Copy to local fs
       //unlink(dst);
-     {f = open(dst, loc_wr_flags,
+     {f = open(getFName(dst), loc_wr_flags,
           S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
       if (f < 0)
          {EMSG(strerror(errno) <<" creating '" <<getFName(dst) <<"'.");
@@ -1421,13 +1443,6 @@ int main(int argc, char**argv)
 //
    tpcPB = 0;
 
-// The folloing will be removed when we merge
-//
-   cerr <<"xrdcpy is the beta version of xrdcp; please treat it as such." <<endl;
-   cerr <<"Report problems at: https://savannah.cern.ch/bugs/?group=xrootd" <<endl;
-   cerr <<"Do not use xrdcpy in any production application as it will go away!" <<endl;
-   cerr <<endl;
-
 #ifdef WIN32
    WORD wVersionRequested;
    WSADATA wsaData;
@@ -1438,7 +1453,8 @@ int main(int argc, char**argv)
 
 // Invoke config; it it returns then all went well.
 //
-   Config.Config(argc, argv, XrdCpConfig::opt1Src|XrdCpConfig::optNoXtnd);
+   Config.Config(argc, argv, XrdCpConfig::opt1Src|XrdCpConfig::optNoStdIn
+                            |XrdCpConfig::optNoXtnd);
 
 // Turn off any blab from the client
 //
@@ -1475,7 +1491,7 @@ int main(int argc, char**argv)
        xrd_wr_flags |=  kXR_delete;
        loc_wr_flags = LOC_WR_FLAGS_FORCE; // Flags for the local fs
       }
-   if (Config.Want(XrdCpConfig::DoRetry  ))
+   if (Config.Want(XrdCpConfig::DoRetry  ) && Config.Retry >= 0)
       {EnvPutInt(NAME_CONNECTTIMEOUT , 60);
        EnvPutInt(NAME_FIRSTCONNECTMAXCNT, Config.Retry);
       }
@@ -1556,7 +1572,9 @@ int main(int argc, char**argv)
 // Generate destination opaque data now
 //
    if (!isTPC) Opaque = Config.dstOpq;
-      else if (!(Opaque = genDestCgi(cpnfo.XrdCli, srcpath))) exit(4);
+      else {if (!(Opaque = genDestCgi(cpnfo.XrdCli, srcpath))) exit(4);
+            tpcSrc = cpnfo.XrdCli;
+           }
 
 // Verify the correctness of the destination
 //

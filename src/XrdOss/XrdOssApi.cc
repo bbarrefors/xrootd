@@ -57,6 +57,7 @@
 #include "XrdOuc/XrdOucEnv.hh"
 #include "XrdOuc/XrdOucName2Name.hh"
 #include "XrdOuc/XrdOucXAttr.hh"
+#include "XrdSys/XrdSysAtomics.hh"
 #include "XrdSys/XrdSysError.hh"
 #include "XrdSys/XrdSysHeaders.hh"
 #include "XrdSys/XrdSysPlatform.hh"
@@ -100,7 +101,6 @@ XrdOss *XrdOssGetSS(XrdSysLogger *Logger, const char *config_fn,
    extern XrdSysError OssEroute;
    XrdSysPlugin    *myLib;
    XrdOss          *(*ep)(XrdOss *, XrdSysLogger *, const char *, const char *);
-   int Debug = (getenv("XRDDEBUG") != 0);
 
 // Verify that versions are compatible.
 //
@@ -131,6 +131,17 @@ XrdOss *XrdOssGetSS(XrdSysLogger *Logger, const char *config_fn,
    return ep((XrdOss *)&myOssSys, Logger, config_fn, OssParms);
 }
  
+/******************************************************************************/
+/*                       X r d O s s D e f a u l t S S                        */
+/******************************************************************************/
+  
+ XrdOss *XrdOssDefaultSS(XrdSysLogger   *logger,
+                         const char     *cfg_fn,
+                         XrdVersionInfo &urVer)
+{
+   return XrdOssGetSS(logger, cfg_fn, 0, 0, urVer);
+}
+
 /******************************************************************************/
 /*                      o o s s _ S y s   M e t h o d s                       */
 /******************************************************************************/
@@ -268,12 +279,11 @@ int XrdOssSys::Chmod(const char *path, mode_t mode, XrdOucEnv *envP)
 int XrdOssSys::Mkdir(const char *path, mode_t mode, int mkpath, XrdOucEnv *envP)
 {
     char actual_path[MAXPATHLEN+1], *local_path;
-    unsigned long long Popts, Hopts;
     int retc;
 
 // Make sure we can modify this path
 //
-   Popts = Check_RO(Mkdir, Hopts, path, "create directory");
+   Check_RW(Mkdir, path, "create directory");
 
 // Generate local path
 //
@@ -398,13 +408,12 @@ int XrdOssSys::Truncate(const char *path, unsigned long long size,
 {
     struct stat statbuff;
     char actual_path[MAXPATHLEN+1], *local_path;
-    unsigned long long Popts, Hopts;
     long long oldsz;
     int retc;
 
 // Make sure we can modify this path
 //
-   Popts = Check_RO(Truncate, Hopts, path, "truncate");
+   Check_RW(Truncate, path, "truncate");
 
 // Generate local path
 //
@@ -543,6 +552,9 @@ int XrdOssDir::Readdir(char *buff, int blen)
       {errno = 0;
        if ((rp = readdir(lclfd)))
           {strlcpy(buff, rp->d_name, blen);
+#ifdef HAVE_FSTATAT
+           if (Stat && fstatat(dirFD, rp->d_name, Stat, 0)) return -errno;
+#endif
            return XrdOssOK;
           }
        *buff = '\0'; ateof = 1;
@@ -562,6 +574,51 @@ int XrdOssDir::Readdir(char *buff, int blen)
    return XrdOssSS->MSS_Readdir(mssfd, buff, blen);
 }
 
+/******************************************************************************/
+/*                               S t a t R e t                                */
+/******************************************************************************/
+/*
+  Function: Set stat buffer pointerto automatically stat returned entries.
+
+  Input:    buff       - Pointer to the stat buffer.
+
+  Output:   Upon success, return 0.
+
+            Upon failure, returns a (-errno).
+
+  Warning: The caller must provide proper serialization.
+*/
+int XrdOssDir::StatRet(struct stat *buff)
+{
+
+// Check if this object is actually open
+//
+   if (!isopen) return -XRDOSS_E8002;
+
+// We only support autostat for local directories
+//
+   if (!lclfd) return -ENOTSUP;
+
+// We do not support autostat unless we have the fstatat function
+//
+#ifndef HAVE_FSTATAT
+   return -ENOTSUP;
+#endif
+
+// Now obtain the correct file descriptor which is special in Solaris
+//
+#ifdef __solaris__
+   dirFD = lclfd->dd_fd;
+#else
+   dirFD = dirfd(lclfd);
+#endif
+
+// All is well
+//
+   Stat = buff;
+   return 0;
+}
+  
 /******************************************************************************/
 /*                                 C l o s e                                  */
 /******************************************************************************/
@@ -742,6 +799,10 @@ ssize_t XrdOssFile::Read(off_t offset, size_t blen)
 
      if (fd < 0) return (ssize_t)-XRDOSS_E8004;
 
+#if defined(__linux__)
+     posix_fadvise(fd, offset, blen, POSIX_FADV_WILLNEED);
+#endif
+
      return 0;  // We haven't implemented this yet!
 }
 
@@ -778,6 +839,88 @@ ssize_t XrdOssFile::Read(void *buff, off_t offset, size_t blen)
                 while(retval < 0 && errno == EINTR);
 
      return (retval >= 0 ? retval : (ssize_t)-errno);
+}
+
+/******************************************************************************/
+/*                                  r e a d v                                 */
+/******************************************************************************/
+
+/*
+  Function: Perform all the reads specified in the readV vector.
+
+  Input:    readV     - A description of the reads to perform; includes the
+                        absolute offset, the size of the read, and the buffer
+                        to place the data into.
+            readCount - The size of the readV vector.
+
+  Output:   Returns the number of bytes read upon success and SFS_ERROR o/w.
+            If the number of bytes read is less than requested, it is considered
+            an error.
+*/
+
+ssize_t XrdOssFile::ReadV(XrdOucIOVec *readV, int n)
+{
+   ssize_t rdsz, totBytes = 0;
+   int i;
+
+// For platforms that support fadvise, pre-advise what we will be reading
+//
+#if defined(__linux__) && defined(HAVE_ATOMICS)
+   EPNAME("ReadV");
+   long long begOff, endOff, begLst = -1, endLst = -1;
+   int nPR = n;
+
+// Indicate we are in preread state and see if we have exceeded the limit
+//
+   if (XrdOssSS->prDepth
+   && AtomicInc((XrdOssSS->prActive)) < XrdOssSS->prQSize && n > 2)
+      {int faBytes = 0;
+       for (nPR=0;nPR < XrdOssSS->prDepth && faBytes < XrdOssSS->prBytes;nPR++)
+           if (readV[nPR].size > 0)
+              {begOff = XrdOssSS->prPMask &  readV[nPR].offset;
+               endOff = XrdOssSS->prPBits | (readV[nPR].offset+readV[nPR].size);
+               rdsz = endOff - begOff + 1;
+               if ((begOff > endLst || endOff < begLst)
+               &&  rdsz < XrdOssSS->prBytes)
+                  {posix_fadvise(fd, begOff, rdsz, POSIX_FADV_WILLNEED);
+                   TRACE(Debug,"fadvise(" <<fd <<',' <<begOff <<',' <<rdsz <<')');
+                   faBytes += rdsz;
+                  }
+               begLst = begOff; endLst = endOff;
+              }
+      }
+#endif
+
+// Read in the vector and do a pre-advise if we support that
+//
+   for (i = 0; i < n; i++)
+       {do {rdsz = pread(fd, readV[i].data, readV[i].size, readV[i].offset);}
+           while(rdsz < 0 && errno == EINTR);
+        if (rdsz < 0 || rdsz != readV[i].size)
+           {totBytes =  (rdsz < 0 ? -errno : -ESPIPE); break;}
+        totBytes += rdsz;
+#if defined(__linux__) && defined(HAVE_ATOMICS)
+        if (nPR < n && readV[nPR].size > 0)
+           {begOff = XrdOssSS->prPMask &  readV[nPR].offset;
+            endOff = XrdOssSS->prPBits | (readV[nPR].offset+readV[nPR].size);
+            rdsz = endOff - begOff + 1;
+            if ((begOff > endLst || endOff < begLst)
+            &&  rdsz <= XrdOssSS->prBytes)
+               {posix_fadvise(fd, begOff, rdsz, POSIX_FADV_WILLNEED);
+                TRACE(Debug,"fadvise(" <<fd <<',' <<begOff <<',' <<rdsz <<')');
+               }
+            begLst = begOff; endLst = endOff;
+           }
+        nPR++;
+#endif
+       }
+
+// All done, return bytes read.
+//
+#if defined(__linux__) && defined(HAVE_ATOMICS)
+   if (XrdOssSS->prDepth) AtomicDec((XrdOssSS->prActive));
+#endif
+   return totBytes;
 }
 
 /******************************************************************************/
@@ -988,6 +1131,13 @@ int XrdOssFile::Open_ufs(const char *path, int Oflag, int Mode,
 #ifdef XRDOSSCX
     int attcx = 0;
 #endif
+
+// If we need to do a stat() prior to the open, do so now
+//
+   if (XrdOssSS->STT_PreOp)
+      {struct stat Stat;
+       if ((*(XrdOssSS->STT_Func))(path, &Stat, XRDOSS_preop, 0)) return -errno;
+      }
 
 // Now open the actual data file in the appropriate mode.
 //

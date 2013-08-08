@@ -48,6 +48,7 @@ class XrdSysLogger;
 class XrdFrmConfigSE;
 
 struct XrdVersionInfo;
+struct stat;
 
 class XrdFrmConfig
 {
@@ -56,6 +57,7 @@ public:
 const char         *myProg;
 const char         *myName;
 const char         *myInst;
+const char         *mySite;
 const char         *myFrmid;
 const char         *myFrmID;
 const char         *lockFN;
@@ -78,6 +80,7 @@ static const int    cmdAlloc = 0x0001;
 static const int    cmdMDP   = 0x0002;
 static const int    cmdStats = 0x0004;
 static const int    cmdXPD   = 0x0008;
+static const int    cmdRME   = 0x0010;
 
 int                 xfrIN;
 int                 xfrOUT;
@@ -166,6 +169,8 @@ int          RemotePath (const char *oldp, char *newp, int newpsz);
 
 XrdOucTList *Space(const char *Name, const char *Path=0);
 
+int          Stat(const char *xLfn, const char *xPfn, struct stat *buff);
+
 enum  SubSys {ssAdmin, ssMigr, ssPstg, ssPurg, ssXfr};
 
       XrdFrmConfig(SubSys ss, const char *vopts, const char *uinfo);
@@ -204,6 +209,7 @@ int          xoss();
 int          xpol();
 int          xpolprog();
 int          xqchk();
+int          xsit();
 int          xspace(int isPrg=0, int isXA=1);
 void         xspaceBuild(char *grp, char *fn, int isxa);
 int          xxfr();
@@ -216,6 +222,7 @@ char               *RemoteRoot;
 XrdOucStream       *cFile;
 XrdVersionInfo     *myVersion;
 
+bool                doStatPF;
 int                 plnDTS;
 const char         *pfxDTS;
 const char         *vOpts;

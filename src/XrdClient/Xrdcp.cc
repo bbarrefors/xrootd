@@ -32,6 +32,7 @@
 //////////////////////////////////////////////////////////////////////////
 
 #include "XrdClient/XrdClientUrlInfo.hh"
+#include "XrdClient/XrdClientReadCache.hh"
 #include "XrdSys/XrdSysPthread.hh"
 #include "XrdClient/XrdClient.hh"
 #include "XrdClient/XrdCpMthrQueue.hh"
@@ -110,7 +111,7 @@ struct XrdCpInfo {
 
 #define XRDCP_BLOCKSIZE          (8*1024*1024)
 #define XRDCP_XRDRASIZE          (30*XRDCP_BLOCKSIZE)
-#define XRDCP_VERSION            "(C) 2004-2011 by the XRootD collaboration. Version: "XrdVSTRING
+#define XRDCP_VERSION            "(C) 2004-2011 by the XRootD collaboration. Version: " XrdVSTRING
 
 ///////////////////////////////////////////////////////////////////////
 // Coming from parameters on the cmd line
@@ -1482,7 +1483,7 @@ int main(int argc, char**argv) {
 
       if ( (strstr(argv[i], "-y") == argv[i]) &&
            (argc >= i+2) ) {
-         int maxSources = atoi(argv[i+1]);
+//       int maxSources = atoi(argv[i+1]);
          i++;
          continue;
       }

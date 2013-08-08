@@ -26,11 +26,11 @@
 /* specific prior written permission of the institution or contributor.       */
 /******************************************************************************/
 
-#include <XrdSys/XrdSysLogger.hh>
-#include <XrdSys/XrdSysError.hh>
+#include "XrdSys/XrdSysLogger.hh"
+#include "XrdSys/XrdSysError.hh"
 
-#include <XrdCrypto/XrdCryptoAux.hh>
-#include <XrdCrypto/XrdCryptoTrace.hh>
+#include "XrdCrypto/XrdCryptoAux.hh"
+#include "XrdCrypto/XrdCryptoTrace.hh"
 
 //
 // For error logging and tracing
@@ -79,7 +79,7 @@ int XrdCryptoTZCorr()
    // Time Zone correction (wrt UTC)
    
    if (!TZInitialized) {
-      time_t now = time(0), lct = 0, gmt = 0;
+      time_t now = time(0);
       struct tm ltn, gtn;
       if (localtime_r(&now, &ltn) != 0 && gmtime_r(&now, &gtn) != 0) {
          TZCorr = int(difftime(mktime(&ltn), mktime(&gtn)));

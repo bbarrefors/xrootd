@@ -36,7 +36,7 @@
 /*                                                                            */
 /* ************************************************************************** */
 
-#include <XrdCrypto/XrdCryptoAux.hh>
+#include "XrdCrypto/XrdCryptoAux.hh"
 
 #define MAXFACTORYNAMELEN  10
 // ---------------------------------------------------------------------------//
@@ -54,7 +54,6 @@ class XrdCryptoX509Chain;
 class XrdCryptoX509Crl;
 class XrdCryptoX509Req;
 
-#if 1
 //
 // Prototypes for some Utility Functions
 
@@ -81,7 +80,6 @@ typedef int (*XrdCryptoX509ParseFile_t)(const char *fname,
 // certificates from bucket parsing
 typedef int (*XrdCryptoX509ParseBucket_t)(XrdSutBucket *,
                                           XrdCryptoX509Chain *);
-#endif
 
 class XrdCryptoFactory
 {
@@ -101,6 +99,9 @@ public:
 
    // Get the right factory
    static XrdCryptoFactory *GetCryptoFactory(const char *factoryname);
+   
+   // Any possible notification
+   virtual void Notify() { }
 
    // Hook to a Key Derivation Function (PBKDF2 when possible)
    virtual XrdCryptoKDFunLen_t KDFunLen(); // Length of buffer
