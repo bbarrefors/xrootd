@@ -226,6 +226,22 @@ void XrdCmsNode::setName(XrdLink *lnkp, int port)
       }
 }
 
+/*
+ * Given a buffer and length, copy the IPV6 address to the buffer.
+ * Returns the number of bytes copied, excluding the nul-terminator.
+ * If the buffer is too small, returns 0 and the contents of result_buffer
+ * will not be touched.
+ */
+int XrdCmsNode::getName(char * result_buffer, size_t buffer_length) const
+{
+  if (buffer_length <= (size_t)IPV6Len)
+    return 0;
+  strncpy(result_buffer, IPV6, IPV6Len);
+  result_buffer[IPV6Len] = '\0'; // This is not an off-by-one error as IPV6 is 
+  // not guaranteed to be zero-padded.
+  return IPV6Len;
+}
+
 /******************************************************************************/
 /*                                  D i s c                                   */
 /******************************************************************************/

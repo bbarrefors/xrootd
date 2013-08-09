@@ -100,6 +100,8 @@ class XrdInet;
 class XrdScheduler;
 class XrdOucName2Name;
 class XrdOucTrace;
+class XrdCmsPref;
+class XrdCmsPrefNodes;
 
 struct XrdCmsXmiEnv
 {
@@ -141,6 +143,7 @@ class XrdCmsPrepArgs;
 #define XMI_SELECT 0x00000100
 #define XMI_SPACE  0x00000200
 #define XMI_STAT   0x00000400
+#define XMI_PREF   0x00000800
 #define XMI_ALL    0x000007ff
 
 class XrdCmsXmi
@@ -217,6 +220,17 @@ virtual int  Space (      XrdCmsReq      *Request) {return 0;}  // Server Only
 virtual int  Stat  (      XrdCmsReq      *Request,
                     const char           *path,
                     const char           *opaque) = 0;
+
+// Called to get information about the XMI's node preferences for a given
+// file.
+// Opaque may be NULL
+virtual int  Pref  (      XrdCmsReq      *Request,
+			  const char     *path,
+			  const char     *opaque,
+			  XrdCmsPref      &pref,
+			  XrdCmsPrefNodes &nodes
+			  ) {return 0;};
+
 
 // Called after the plugin is loaded to determine which and how the above
 // methods are to be called.
