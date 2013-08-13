@@ -56,6 +56,8 @@
 
 #include "XrdSys/XrdSysPriv.hh"
 #include "XrdSys/XrdSysPlatform.hh"
+#include "XrdSys/XrdSysLogger.hh"
+#include "XrdSys/XrdSysError.hh"
 
 // Dynamic libs
 // Bypass Solaris ELF madness
@@ -88,6 +90,7 @@
 #include <string.h>     // needed by memcpy() and strcspn()
 #include <netdb.h>      // needed by getservbyname()
 #include <ctype.h>
+#include <sstream>
 
 #define  SafeDelete(x) { if (x) { delete x; x = 0; } }
 
@@ -1989,12 +1992,11 @@ XrdClientConn::HandleServerError(XReqErrorType &errorType, XrdClientMessage *xms
 	    XrdClientUrlInfo NewUrl(fUrl.GetUrl());
 
 	    if (DebugLevel() >= XrdClientDebug::kUSERDEBUG)
-		Info(XrdClientDebug::kUSERDEBUG,
-		     "HandleServerError",
-		     "Received redirection to [" << newhost << ":" << newport <<
-		     "]. Token=[" << fRedirInternalToken << "]" <<
-		     "]. Opaque=[" << fRedirOpaque << "].");
-
+	      Info(XrdClientDebug::kUSERDEBUG,
+		   "HandleServerError",
+		   "Received redirection to [" << newhost << ":" << newport <<
+		   "]. Token=[" << fRedirInternalToken << "]" <<
+		   "]. Opaque=[" << fRedirOpaque << "].");
 	    errorType = kOK;
 
 	    NewUrl.Host = NewUrl.HostAddr = newhost;

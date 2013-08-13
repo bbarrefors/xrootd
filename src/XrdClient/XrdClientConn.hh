@@ -388,7 +388,6 @@ private:
     ERemoteServerType          fServerType;         // Server type as returned by doHandShake() 
     SessionIDInfo              mySessionID;         // Login session ID
 
-
     static XrdSysMutex         fSessionIDRMutex;    // Mutex for the Repo
     static XrdOucHash<SessionIDInfo>
     fSessionIDRepo;      // The repository of session IDs, shared.

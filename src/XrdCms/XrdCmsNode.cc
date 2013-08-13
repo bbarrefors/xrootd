@@ -548,7 +548,7 @@ const char *XrdCmsNode::do_Locate(XrdCmsRRData &Arg)
        if (Xmi_Select->Select(&Req, XMI_LOCATE, Arg.Path, Arg.Opaque)) return 0;
       }
 
-// Grab the refresh option (the only one we support)
+// Grab the refresh option (the only one we support), and Select
 //
    if (Arg.Opts & CmsLocateRequest::kYR_refresh) 
       {Sel.Opts  = XrdCmsSelect::Refresh; *toP++='s';}
