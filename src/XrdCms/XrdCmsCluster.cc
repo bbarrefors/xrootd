@@ -35,6 +35,7 @@
 #include <unistd.h>
 #include <netinet/in.h>
 #include <sys/types.h>
+#include <sstream>
 
 #include "XProtocol/YProtocol.hh"
   
@@ -749,7 +750,7 @@ void XrdCmsCluster::ResetRef(SMask_t smask)
   
 int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
 {
-   EPNAME("Select");
+   EPNAME("Select");   
    XrdCmsPInfo  pinfo;
    const char  *Amode;
    int dowt = 0, retc, isRW, fRD, noSel = (Sel.Opts & XrdCmsSelect::Defer);
@@ -761,9 +762,8 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
    //   smask: The mask of servers which could stage the file.
    //   qmask: The mask of servers which we would like to query
 
-
-// Establish some local options
-//
+   // Establish some local options
+   //
    if (Sel.Opts & XrdCmsSelect::Write) 
       {isRW = 1; Amode = "write";
        if (Config.RWDelay)

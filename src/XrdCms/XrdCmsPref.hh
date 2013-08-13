@@ -11,6 +11,8 @@
 #define __XRD_CMS_PREF_H_
 
 #include "XrdCms/XrdCmsTypes.hh"
+#include "XrdCms/XrdCmsConfig.hh"
+#include "XrdCms/XrdCmsTrace.hh"
 
 #define MAX_PREF_LEVELS 4
 
@@ -42,7 +44,7 @@ inline SMask_t SelectNodes(SMask_t available_nodes)
 {
    if (m_is_initialized)
    {
-      return do_SelectNodes(available_nodes);
+     return do_SelectNodes(available_nodes);
    }
    return available_nodes;
 }
@@ -66,6 +68,14 @@ inline bool SetPreference(unsigned int level, SMask_t preference)
        return false;
    m_prefs[level] = preference;
    return true;
+}
+
+inline SMask_t GetPref(int level)
+{
+  if(m_is_initialized) { }
+  else
+    m_prefs[level] = 1;
+  return m_prefs[level];
 }
 
 private:

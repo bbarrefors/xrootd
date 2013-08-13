@@ -35,6 +35,7 @@
 #include <netinet/in.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sstream>
 
 #include "Xrd/XrdJob.hh"
 #include "Xrd/XrdLink.hh"
@@ -1014,7 +1015,9 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
      {XrdCmsPrefNodes node_prefs;
        Cluster.FillInPrefs(node_prefs);
        XrdCmsReq Req(this, Arg.Request.streamid);
-       if (Xmi_Pref->Pref(&Req, Arg.Path, Arg.Opaque, pref, node_prefs)) return 0;
+       if (Xmi_Pref->Pref(&Req, Arg.Path, Arg.Opaque, pref, node_prefs))	 
+	 return 0;
+       Say.Emsg("Pref", "Highest ranked node is", node_prefs.GetNodeName(pref.GetPref(0)));
      }
 
 // Init select data (note that refresh supresses fast redirects)
