@@ -144,7 +144,7 @@ class XrdCmsPrepArgs;
 #define XMI_SPACE  0x00000200
 #define XMI_STAT   0x00000400
 #define XMI_PREF   0x00000800
-#define XMI_ALL    0x000007ff
+#define XMI_ALL    0x00000fff
 
 class XrdCmsXmi
 {
