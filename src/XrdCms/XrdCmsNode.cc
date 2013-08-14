@@ -1008,13 +1008,13 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
        if (Arg.Opts & CmsSelectRequest::kYR_trunc)  opts |= XMI_TRUNC;
        if (Xmi_Select->Select(&Req, opts, Arg.Path, Arg.Opaque)) return 0;
       }
-
-   Say.Emsg("Pref", "Right before XMI");
    
    // See if the XMI provides preferences for the file staging location.
    XrdCmsPref pref;
    if (Xmi_Pref)
-     {XrdCmsPrefNodes node_prefs;
+     {
+       Say.Emsg("Pref", "We have XMI");
+       XrdCmsPrefNodes node_prefs;
        Cluster.FillInPrefs(node_prefs);
        XrdCmsReq Req(this, Arg.Request.streamid);
        if (Xmi_Pref->Pref(&Req, Arg.Path, Arg.Opaque, pref, node_prefs))	 
