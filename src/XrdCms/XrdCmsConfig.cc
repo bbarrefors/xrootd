@@ -1161,7 +1161,7 @@ int XrdCmsConfig::setupXmi()
    XmiEnv.Trace    = &Trace;
    XmiEnv.Name2Name= xeq_N2N;
 
-// Create a pluin object (we will throw this away without deletion because
+// Create a plugin object (we will throw this away without deletion because
 // the library must stay open but we never want to reference it again).
 //
    if (!(xmiLib = new XrdSysPlugin(&Say, XmiPath, "xmilib", myVInfo))) return 1;
@@ -1423,7 +1423,8 @@ int XrdCmsConfig::xdelay(XrdSysError *eDest, XrdOucStream &CFile)
        {eDest->Emsg("Config", "delay arguments not specified"); return 1;}
 
     while (val)
-          {for (i = 0; i < numopts; i++)
+          {
+	    for (i = 0; i < numopts; i++)
                if (!strcmp(val, dyopts[i].opname))
                   {if (!(val = CFile.GetWord()))
                       {eDest->Emsg("Config", "delay ", dyopts[i].opname,
