@@ -1009,6 +1009,8 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
        if (Xmi_Select->Select(&Req, opts, Arg.Path, Arg.Opaque)) return 0;
       }
 
+   Say.Emsg("Pref", "Right before XMI");
+   
    // See if the XMI provides preferences for the file staging location.
    XrdCmsPref pref;
    if (Xmi_Pref)
@@ -1019,6 +1021,8 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
 	 return 0;
        Say.Emsg("Pref", "Highest ranked node is", node_prefs.GetNodeName(pref.GetPref(0)));
      }
+
+   Say.Emsg("Pref", "Right after XMI");
 
 // Init select data (note that refresh supresses fast redirects)
 //
