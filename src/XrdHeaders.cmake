@@ -37,6 +37,7 @@ set( XROOTD_PUBLIC_HEADERS
   XrdCms/XrdCmsTypes.hh
   XrdCms/XrdCmsConfig.hh
   XrdCms/XrdCmsTrace.hh
+  XrdCms/XrdCmsPList.hh
   XrdNet/XrdNet.hh
   XrdNet/XrdNetAddr.hh
   XrdNet/XrdNetAddrInfo.hh
@@ -61,6 +62,7 @@ set( XROOTD_PUBLIC_HEADERS
   XrdOuc/XrdOucIOVec.hh
   XrdOuc/XrdOucLock.hh
   XrdOuc/XrdOucName2Name.hh
+  XrdOuc/XrdOucPList.hh
   XrdOuc/XrdOucRash.hh
   XrdOuc/XrdOucRash.icc
   XrdOuc/XrdOucStream.hh
