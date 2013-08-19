@@ -31,13 +31,14 @@ set( XROOTD_PUBLIC_HEADERS
   XrdClient/XrdClientUrlSet.hh
   XrdClient/XrdClientVector.hh
   XrdCms/XrdCmsClient.hh
-  XrdCms/XrdCmsXmi.hh
-  XrdCms/XrdCmsReq.hh
-  XrdCms/XrdCmsPref.hh
-  XrdCms/XrdCmsTypes.hh
   XrdCms/XrdCmsConfig.hh
-  XrdCms/XrdCmsTrace.hh
   XrdCms/XrdCmsPList.hh
+  XrdCms/XrdCmsPref.hh
+  XrdCms/XrdCmsPrefNodes.hh
+  XrdCms/XrdCmsReq.hh
+  XrdCms/XrdCmsTrace.hh
+  XrdCms/XrdCmsTypes.hh
+  XrdCms/XrdCmsXmi.hh
   XrdNet/XrdNet.hh
   XrdNet/XrdNetAddr.hh
   XrdNet/XrdNetAddrInfo.hh
