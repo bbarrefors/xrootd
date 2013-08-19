@@ -6,6 +6,10 @@ Prerelease Notes
 ================
 
 + **New Features**
+   * Implement query config chksum to return supported chksum name.
+   * Provide a mechanism to manually control log file rotation via -k.
+   * Add -z option to enable high recision log file timestamps.
+     This update requires plug-in writer to recompile.
    * Serialize client initialization to prevent race conditions
      resulting in aborts when using sss authentication protocol.
    * Provide a mechanism to allow the client to indicate additional
@@ -102,6 +106,7 @@ Prerelease Notes
      in Linux.
 
 + **Minor bug fixes**
+   * Fix file descriptor leaks.
    * Correct option parsing to prevent possible SEGV.
    * Strip off opaque information from dest filename when copying to local
      filesystem. This only affects xrdcp.
@@ -171,4 +176,3 @@ Prerelease Notes
      (sdv) calc with reporting sum of squares (ssq) counts.
    * Remove beta warning from xrdcp after xrdcpy became xrdcp.
    * Pretty up an error message. Required XrdOucERoute patch.
-

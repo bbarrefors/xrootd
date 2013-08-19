@@ -18,8 +18,10 @@
 
 #include "XrdCl/XrdClSocket.hh"
 #include "XrdCl/XrdClUtils.hh"
-#include "XrdSys/XrdSysDNS.hh"
 #include "XrdNet/XrdNetConnect.hh"
+#include "XrdCl/XrdClConstants.hh"
+#include "XrdCl/XrdClMessage.hh"
+#include "XrdCl/XrdClDefaultEnv.hh"
 
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -48,6 +50,8 @@ namespace XrdCl
       pSocket = -1;
       return Status( stError, errSocketError );
     }
+
+    pProtocolFamily = family;
 
     //--------------------------------------------------------------------------
     // Make the socket non blocking and disable the Nagle algorithm since
@@ -156,9 +160,17 @@ namespace XrdCl
     std::vector<XrdNetAddr> addrs;
     std::ostringstream o; o << host << ":" << port;
     Status st;
-    st = Utils::GetHostAddresses( addrs, URL( o.str() ), Utils::IPAll );
+
+    if( pProtocolFamily == AF_INET6 )
+      st = Utils::GetHostAddresses( addrs, URL( o.str() ), Utils::IPAll );
+    else
+      st = Utils::GetHostAddresses( addrs, URL( o.str() ), Utils::IPv4 );
+
     if( !st.IsOK() )
       return st;
+
+    Utils::LogHostAddresses( DefaultEnv::GetLog(), PostMasterMsg, o.str(),
+                             addrs );
 
     return ConnectToAddress( addrs[0], timeout );
   }
@@ -179,7 +191,6 @@ namespace XrdCl
     //--------------------------------------------------------------------------
     int status = XrdNetConnect::Connect( pSocket, pServerAddr.SockAddr(),
                                          pServerAddr.SockSize(), timeout );
-
     if( status != 0 )
     {
       Status st( stError );
@@ -222,7 +233,6 @@ namespace XrdCl
       pSockName    = "";
       pPeerName    = "";
       pName        = "";
-      pServerAddr  = 0;
     }
   }
 
