@@ -34,6 +34,9 @@ set( XROOTD_PUBLIC_HEADERS
   XrdCms/XrdCmsXmi.hh
   XrdCms/XrdCmsReq.hh
   XrdCms/XrdCmsPref.hh
+  XrdCms/XrdCmsTypes.hh
+  XrdCms/XrdCmsConfig.hh
+  XrdCms/XrdCmsTrace.hh
   XrdNet/XrdNet.hh
   XrdNet/XrdNetAddr.hh
   XrdNet/XrdNetAddrInfo.hh
