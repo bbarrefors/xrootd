@@ -1035,16 +1035,13 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
    XrdCmsPref pref;
    if (Xmi_Pref)
      {
-       Say.Emsg("Pref", "We have XMI");
        XrdCmsPrefNodes node_prefs;
        Cluster.FillInPrefs(node_prefs);
        XrdCmsReq Req(this, Arg.Request.streamid);
        if (Xmi_Pref->Pref(&Req, Arg.Path, Arg.Opaque, pref, node_prefs))	 
 	 return 0;
-       Say.Emsg("Pref", "Highest ranked node is", node_prefs.GetNodeName(pref.GetPref(0)));
+       Say.Emsg("Pref", "Highest ranked node is", node_prefs.GetNodeName(pref.GetPref(3)-1));
      }
-
-   Say.Emsg("Pref", "Right after XMI");
 
 // Init select data (note that refresh supresses fast redirects)
 //

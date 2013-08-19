@@ -72,9 +72,6 @@ inline bool SetPreference(unsigned int level, SMask_t preference)
 
 inline SMask_t GetPref(int level)
 {
-  if(m_is_initialized) { }
-  else
-    m_prefs[level] = 1;
   return m_prefs[level];
 }
 
