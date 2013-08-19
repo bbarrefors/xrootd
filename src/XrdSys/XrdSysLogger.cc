@@ -450,7 +450,6 @@ int XrdSysLogger::ReBind(int dorename)
                                     nowtime.tm_mday);
        strncpy(Filesfx, buff, 8);
       }
->>>>>>> github-xrootd/master
 
 // Open the file for output. Note that we can still leak a file descriptor
 // if a thread forks a process before we are able to do the fcntl(), sigh.

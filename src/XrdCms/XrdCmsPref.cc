@@ -51,4 +51,3 @@ SMask_t XrdCmsPref::do_AdditionalNodesToQuery(SMask_t queried_nodes)
    // the right thing" if all nodes have already been queried.
    return 0;
 }
-
