@@ -1040,7 +1040,26 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
        XrdCmsReq Req(this, Arg.Request.streamid);
        if (Xmi_Pref->Pref(&Req, Arg.Path, Arg.Opaque, pref, node_prefs))	 
 	 return 0;
-       Say.Emsg("Pref", "Highest ranked node is", node_prefs.GetNodeName(pref.GetPref(3)-1));
+       int i = MAX_PREF_LEVELS-1;
+       SMask_t pref_mask = 0;
+       while ((i>0) && (pref_mask==0)) {
+	 pref_mask = pref.GetPref(i);
+	 i--;
+       }
+       int node = 100;
+       i = -1;
+       while (pref_mask != 0) {
+	 pref_mask = pref_mask >> 1;
+	 i++;
+       }
+       if(i != -1) 
+	 node = i;
+       std::stringstream ss;
+       ss << node;
+       const char * node_str = NULL;
+       node_str = ss.str().c_str();
+       if (node != 100)
+	 Say.Emsg("Pref", "Highest ranked node is", node_prefs.GetNodeName(node));
      }
 
 // Init select data (note that refresh supresses fast redirects)
