@@ -14,7 +14,7 @@ SMask_t XrdCmsPref::do_SelectNodes(SMask_t available_nodes)
 {
    SMask_t filtered_nodes = available_nodes;
    SMask_t previous_nodes = available_nodes;
-   unsigned int index=0;
+x   unsigned int index=0;
    // Continue applying the increasingly-specific preference mask
    // until we've gone through all levels or we eliminated all the possible
    // sources.

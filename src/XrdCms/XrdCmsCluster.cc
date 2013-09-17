@@ -757,7 +757,7 @@ void XrdCmsCluster::ResetRef(SMask_t smask)
   
 int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
 {
-   EPNAME("Select");   
+   EPNAME("Select");
    XrdCmsPInfo  pinfo;
    const char  *Amode;
    int dowt = 0, retc, isRW, fRD, noSel = (Sel.Opts & XrdCmsSelect::Defer);
@@ -789,7 +789,7 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
        return -1;
       }
 
-// If we are running a shared file system preform an optional restricted
+// If we are running a shared file system perform an optional restricted
 // pre-selection and then do a standard selection.
 //
    if (baseFS.isDFS())
@@ -1422,7 +1422,8 @@ int XrdCmsCluster::SelNode(XrdCmsSelect &Sel, SMask_t pmask, SMask_t amask, XrdC
 // Update info
 //
    if (nP)
-      {strcpy(Sel.Resp.Data, nP->Name(Sel.Resp.DLen, Sel.Resp.Port));
+     {Say.Emsg("Selected node", nP->Name());
+       strcpy(Sel.Resp.Data, nP->Name(Sel.Resp.DLen, Sel.Resp.Port));
        Sel.Resp.DLen++; Sel.smask = nP->NodeMask;
        if (isalt || (Sel.Opts & XrdCmsSelect::Create) || Sel.iovN)
           {if (isalt || (Sel.Opts & XrdCmsSelect::Create))
