@@ -1040,6 +1040,7 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
        XrdCmsReq Req(this, Arg.Request.streamid);
        if (Xmi_Pref->Pref(&Req, Arg.Path, Arg.Opaque, pref, node_prefs))	 
 	 return 0;
+     }
 
 // Init select data (note that refresh supresses fast redirects)
 //
@@ -1095,12 +1096,12 @@ const char *XrdCmsNode::do_Select(XrdCmsRRData &Arg)
            Arg.Request.rrCode = kYR_error;
            Sel.Resp.Port      = kYR_ENOENT;
            DEBUGR("failed; " <<Sel.Resp.Data << ' ' <<Arg.Path);
-          }
+	}
       } else if (!Sel.Resp.DLen) return 0;
                 else {Arg.Request.rrCode = kYR_redirect;
                       DEBUGR("Redirect -> " <<Sel.Resp.Data <<':'
                             <<Sel.Resp.Port <<" for " <<Arg.Path);
-             }
+		}
 
 // Format the response
 //
