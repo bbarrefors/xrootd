@@ -868,7 +868,7 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
    else
      servers_to_query = 0;
    //TRACE(Files, "New query mask: " << servers_to_query);
-   cerr << "Pref: This is a test message\n";
+   cerr << "Pref: This is another test message\n";
 // If we can query additional servers, do so now. The client will be placed
 // in the callback queue only if we have no possible selections
 //
