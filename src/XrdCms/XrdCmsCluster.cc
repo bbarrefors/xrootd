@@ -268,6 +268,7 @@ SMask_t XrdCmsCluster::Broadcast(SMask_t smask, const struct iovec *iod,
        {if ((nP = NodeTab[i]) && nP->isNode(bmask))
            {nP->Lock();
             STMutex.UnLock();
+	    cerr << "Pref: The selected node is " << nP->Name() << "\n";
             if (nP->Send(iod, iovcnt, iotot) < 0) 
                {unQueried |= nP->Mask();
                 DEBUG(nP->Ident <<" is unreachable");
@@ -809,7 +810,7 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
                        (smask ? "stage" : Amode))+1;
        return -1;
       }
-
+      
 // If either a refresh is wanted or we didn't find the file, re-prime the cache
 // which will force the client to wait. Otherwise, compute the primary and
 // secondary selections. If there are none, the client may have to wait if we
@@ -867,8 +868,8 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
        servers_to_query = -1;
    else
      servers_to_query = 0;
+
    //TRACE(Files, "New query mask: " << servers_to_query);
-   cerr << "Pref: This is another test message\n";
 // If we can query additional servers, do so now. The client will be placed
 // in the callback queue only if we have no possible selections
 //
@@ -886,8 +887,7 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
        if (prefs)
 	 next_servers |= prefs->AdditionalNodesToQuery(servers_to_query);
        //TRACE(Files, "Next query servers " << next_servers);
-       Cache.UnkFile(Sel, next_servers); // Record the errors we incurred and the next server set.
-       
+       Cache.UnkFile(Sel, next_servers); // Record the errors we incurred and the next server set.       
        if (dowt) return retc;
      } else if (dowt && (retc < 0) && !noSel)
      // There are no servers to query.
