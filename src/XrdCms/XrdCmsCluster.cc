@@ -1422,7 +1422,7 @@ int XrdCmsCluster::SelNode(XrdCmsSelect &Sel, SMask_t pmask, SMask_t amask, XrdC
 // Update info
 //
    if (nP)
-     {Say.Emsg("Selected node", nP->Name());
+     {cerr << "Pref: Selected node is " << nP->Name() << "\n";
        strcpy(Sel.Resp.Data, nP->Name(Sel.Resp.DLen, Sel.Resp.Port));
        Sel.Resp.DLen++; Sel.smask = nP->NodeMask;
        if (isalt || (Sel.Opts & XrdCmsSelect::Create) || Sel.iovN)
