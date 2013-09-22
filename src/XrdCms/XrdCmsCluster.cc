@@ -268,11 +268,12 @@ SMask_t XrdCmsCluster::Broadcast(SMask_t smask, const struct iovec *iod,
        {if ((nP = NodeTab[i]) && nP->isNode(bmask))
            {nP->Lock();
             STMutex.UnLock();
-	    cerr << "Pref: The selected node is " << nP->Name() << "\n";
             if (nP->Send(iod, iovcnt, iotot) < 0) 
                {unQueried |= nP->Mask();
+		 cerr << "Pref: Selected node " << nP->Ident << " is unreachable\n";
                 DEBUG(nP->Ident <<" is unreachable");
                }
+	    else{cerr << "Pref: The selected node is " << nP->Ident << "\n";}
             nP->UnLock();
             STMutex.Lock();
            }
@@ -1422,7 +1423,7 @@ int XrdCmsCluster::SelNode(XrdCmsSelect &Sel, SMask_t pmask, SMask_t amask, XrdC
 // Update info
 //
    if (nP)
-     {cerr << "Pref: Selected node is " << nP->Name() << "\n";
+     {cerr << "Pref: The selected node is " << nP->Ident << "\n";
        strcpy(Sel.Resp.Data, nP->Name(Sel.Resp.DLen, Sel.Resp.Port));
        Sel.Resp.DLen++; Sel.smask = nP->NodeMask;
        if (isalt || (Sel.Opts & XrdCmsSelect::Create) || Sel.iovN)
