@@ -270,10 +270,10 @@ SMask_t XrdCmsCluster::Broadcast(SMask_t smask, const struct iovec *iod,
             STMutex.UnLock();
             if (nP->Send(iod, iovcnt, iotot) < 0) 
                {unQueried |= nP->Mask();
-		 cerr << "Pref: Selected node " << nP->Ident << " is unreachable\n";
-                DEBUG(nP->Ident <<" is unreachable");
+		 cerr << "PrefBroadcast: Selected node " << nP->Ident << " is unreachable\n";
+		 DEBUG(nP->Ident <<" is unreachable");
                }
-	    else{cerr << "Pref: The selected node is " << nP->Ident << "\n";}
+	    else{cerr << "PrefBroadcast: This node should be the selected " << nP->Ident << "\n";}
             nP->UnLock();
             STMutex.Lock();
            }
@@ -1420,11 +1420,12 @@ int XrdCmsCluster::SelNode(XrdCmsSelect &Sel, SMask_t pmask, SMask_t amask, XrdC
      }
    STMutex.UnLock();
 
+   cerr << "PrefSelNode: This should be the primary node " << nP->Ident << "\n";
+
 // Update info
 //
    if (nP)
-     {cerr << "Pref: The selected node is " << nP->Ident << "\n";
-       strcpy(Sel.Resp.Data, nP->Name(Sel.Resp.DLen, Sel.Resp.Port));
+     { strcpy(Sel.Resp.Data, nP->Name(Sel.Resp.DLen, Sel.Resp.Port));
        Sel.Resp.DLen++; Sel.smask = nP->NodeMask;
        if (isalt || (Sel.Opts & XrdCmsSelect::Create) || Sel.iovN)
           {if (isalt || (Sel.Opts & XrdCmsSelect::Create))
