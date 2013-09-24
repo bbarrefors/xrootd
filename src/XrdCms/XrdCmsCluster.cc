@@ -270,11 +270,10 @@ SMask_t XrdCmsCluster::Broadcast(SMask_t smask, const struct iovec *iod,
             STMutex.UnLock();
             if (nP->Send(iod, iovcnt, iotot) < 0) 
                {unQueried |= nP->Mask();
-		 cerr << "PrefBroadcast: Selected node " << nP->Ident << " is unreachable\n";
+		 cerr << "PrefBroadast: Node " << nP->Ident << " is unreachable\n";
 		 DEBUG(nP->Ident <<" is unreachable");
                }
-	    else{cerr << "PrefBroadcast: This node should be the selected " << nP->Ident << "\n";}
-            nP->UnLock();
+	    nP->UnLock();
             STMutex.Lock();
            }
        }
@@ -1392,6 +1391,8 @@ int XrdCmsCluster::SelNode(XrdCmsSelect &Sel, SMask_t pmask, SMask_t amask, XrdC
     SMask_t mask;
     XrdCmsNode *nP = 0;
 
+    cerr << "PrefSelNode: Inside of SelNode\n";
+
 // There is a difference bwteen needing space and needing r/w access. The former
 // is needed when we will be writing data the latter for inode modifications.
 //
@@ -1410,6 +1411,7 @@ int XrdCmsCluster::SelNode(XrdCmsSelect &Sel, SMask_t pmask, SMask_t amask, XrdC
 	 {nP = (Config.sched_RR
 		? SelbyRef( mask, nump, delay, &reason, needspace)
 		: SelbyLoad(mask, nump, delay, &reason, needspace));
+	   cerr << "PrefSelNode: This should be the primary selected node " << nP->Ident << "\n";
 	   if (nP || (nump && delay) || NodeCnt < Config.SUPCount) break;
 	   mask = prefs ? prefs->SelectNodes(orig_mask & ~mask) : 0;
 	 }
@@ -1419,8 +1421,6 @@ int XrdCmsCluster::SelNode(XrdCmsSelect &Sel, SMask_t pmask, SMask_t amask, XrdC
        if (!(Sel.Opts & XrdCmsSelect::isMeta)) needspace |= isalt;
      }
    STMutex.UnLock();
-
-   cerr << "PrefSelNode: This should be the primary node " << nP->Ident << "\n";
 
 // Update info
 //
