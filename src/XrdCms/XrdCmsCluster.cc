@@ -270,7 +270,7 @@ SMask_t XrdCmsCluster::Broadcast(SMask_t smask, const struct iovec *iod,
             STMutex.UnLock();
             if (nP->Send(iod, iovcnt, iotot) < 0) 
                {unQueried |= nP->Mask();
-		 cerr << "PrefBroadast: Node " << nP->Ident << " is unreachable\n";
+		 //cerr << "PrefBroadast: Node " << nP->Ident << " is unreachable\n";
 		 DEBUG(nP->Ident <<" is unreachable");
                }
 	    nP->UnLock();
@@ -343,7 +343,7 @@ int XrdCmsCluster::Broadsend(SMask_t Who, XrdCms::CmsRRHdr &Hdr,
 
 // Run through the table looking for a node to send the message to
 //
-do{for (i = Beg; i <= Fin; i++)
+   do{for (i = Beg; i <= Fin; i++)
        {if ((nP = NodeTab[i]) && nP->isNode(Who))
            {nP->Lock();
             STMutex.UnLock();
@@ -772,6 +772,7 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
 
    // Establish some local options
    //
+   //cerr << "PrefSelect: Starting selection process\n";
    if (Sel.Opts & XrdCmsSelect::Write) 
       {isRW = 1; Amode = "write";
        if (Config.RWDelay)
@@ -781,6 +782,7 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
       }
       else {isRW = 0; Amode = "read"; fRD = 1;}
 
+   //cerr << "PrefSelect: About to find who serves path\n";
 // Find out who serves this path
 //
    if (!Cache.Paths.Find(Sel.Path.Val, pinfo)
@@ -790,11 +792,14 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
        return -1;
       }
 
+   //cerr << "PrefSelect: Check if running shared fs\n";
+
 // If we are running a shared file system perform an optional restricted
 // pre-selection and then do a standard selection.
 //
    if (baseFS.isDFS())
       {pmask = amask;
+	//cerr << "PrefSelect: We are running a shared fs\n";
        smask = (Sel.Opts & XrdCmsSelect::Online ? 0 : pinfo.ssvec & amask);
        if (baseFS.Trim())
           {Sel.Resp.DLen = 0;
@@ -810,7 +815,9 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
                        (smask ? "stage" : Amode))+1;
        return -1;
       }
-      
+
+   //cerr << "PrefSelect: About to refresh\n";
+   
 // If either a refresh is wanted or we didn't find the file, re-prime the cache
 // which will force the client to wait. Otherwise, compute the primary and
 // secondary selections. If there are none, the client may have to wait if we
@@ -821,7 +828,8 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
 //
    if (!(Sel.Opts & XrdCmsSelect::Refresh)
    &&   (retc = Cache.GetFile(Sel, pinfo.rovec)))
-      {if (isRW)
+     {   //cerr << "PrefSelect: Yes refresh is needed\n";
+	if (isRW)
           {     if (retc<0) return Config.LUPDelay;
               else if (Sel.Opts & XrdCmsSelect::Replica)
                    {pmask = amask & ~(Sel.Vec.hf | Sel.Vec.bf); smask = 0;
@@ -862,9 +870,10 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
    //
    SMask_t servers_to_query;
    if (dowt)
-     if (prefs)
+     if (prefs){
+       //cerr << "PrefSelect: We have preference plugin\n";
        servers_to_query = new_query ? prefs->AdditionalNodesToQuery(0) : Sel.Vec.bf;
-     else
+     } else
        servers_to_query = -1;
    else
      servers_to_query = 0;
@@ -874,14 +883,15 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
 // in the callback queue only if we have no possible selections
 //
    if (servers_to_query)
-     {CmsStateRequest QReq = {{Sel.Path.Hash, kYR_state, kYR_raw, 0}};
+     {   //cerr << "PrefSelect: There are servers to query\n";
+       CmsStateRequest QReq = {{Sel.Path.Hash, kYR_state, kYR_raw, 0}};
        if (Sel.Opts & XrdCmsSelect::Refresh)
 	 QReq.Hdr.modifier |= CmsStateRequest::kYR_refresh;
        if (dowt) retc= (fRD ? Cache.WT4File(Sel,Sel.Vec.hf) : Config.LUPDelay);
        TRACE(Files, "seeking " <<Sel.Path.Val);
        SMask_t unqueryable_servers = Cluster.Broadcast(servers_to_query, QReq.Hdr,
                                                        (void *)Sel.Path.Val,Sel.Path.Len+1);
-
+       //cerr << "PrefSelect: After broadcast\n";
        // Generate the queries to do next time
        SMask_t next_servers = unqueryable_servers;
        if (prefs)
@@ -896,6 +906,8 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
      //
      return (fRD ? Cache.WT4File(Sel,Sel.Vec.hf) : Config.LUPDelay);
 
+   //cerr << "PrefSelect: After all that looking up server stuff\n";
+
    // Broadcast a freshen up request if wanted
    // Note we don't broadcast to the nodes in servers_to_query; these were done above.
    //
@@ -909,6 +921,8 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
 //
    if (noSel) return 0;
 
+   //cerr << "PrefSelect: Start selecting a node\n";
+
 // Select a node
 //
    if (dowt || (retc = SelNode(Sel, pmask, smask, prefs)) < 0)
@@ -918,6 +932,7 @@ int XrdCmsCluster::Select(XrdCmsSelect &Sel, XrdCmsPref *prefs)
 			       (smask ? "stage" : Amode))+1;
        return -1;
      }
+   //cerr << "PrefSelect: A node was selected, return\n";
 
 // All done
 //
